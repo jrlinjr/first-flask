@@ -1178,7 +1178,7 @@ class AuthController:
     def add_share_record(email: str, record_type: int, record_id: int, relation_type: int):
         print("Adding share record...")
         try:
-        # 查詢使用者
+            # 查詢使用者
             user = User.query.filter_by(email=email).first()
             if not user:
                 return {
@@ -1235,203 +1235,417 @@ class AuthController:
             }, 200
             
         except Exception as e:
+            print(f"add_share_record error: {str(e)}")  # 添加詳細錯誤日誌
             db.session.rollback()
             return {
                 "status": "1",
                 "message": "分享失敗"
             }, 500
 
-    
-
     @staticmethod
-    def get_shared_records(email: str, relation_type: str):
-        print("Getting shared records...")
-
-        # 1) 基本檢查（不用 try/except）
-        user = User.query.filter_by(email=email).first()
-        if not user:
-            return {"status": "1", "message": "使用者不存在"}, 404
-
-        # relation_type 只接受 0/1/2
-        if not isinstance(relation_type, (str, int)):
-            return {"status": "1", "message": "type 參數格式錯誤"}, 400
-        if isinstance(relation_type, str):
-            relation_type = relation_type.strip()
-            if not relation_type.isdigit():
-                return {"status": "1", "message": "type 參數格式錯誤"}, 400
-            relation_type_int = int(relation_type)
-        else:
-            relation_type_int = int(relation_type)
-
-        if relation_type_int not in (0, 1, 2):
-            return {"status": "1", "message": "type 參數無效"}, 400
-
-        # 2) 查詢分享記錄
-        if relation_type_int == 0:
-            share_records = ShareRecord.query.filter_by(user_id=user.id).all()
-        else:
-            share_records = ShareRecord.query.filter_by(
-                user_id=user.id, relation_type=relation_type_int
-            ).all()
-
-        # 優先使用 Python 3.11+ 的 UTC，無法使用時退回 timezone.utc
+    def get_shared_records(email: str, relation_type):
+        print(f"Getting shared records for email: {email}, relation_type: {relation_type}")
+        
         try:
-            from datetime import UTC as _UTC
-            tz_utc = _UTC
-        except Exception:
-            tz_utc = timezone.utc
+            # 1) 基本檢查
+            user = User.query.filter_by(email=email).first()
+            if not user:
+                print(f"User not found for email: {email}")
+                return {"status": "1", "message": "使用者不存在"}, 404
 
-        records_list = []
+            print(f"Found user: {user.id}")
 
-        for share in share_records:
-            diary = Diary.query.filter_by(id=share.record_id).first()
-
-            # --- 數值欄位（保底） ---
-            systolic  = int(getattr(diary, "systolic", 0) or 0) if diary else 0
-            diastolic = int(getattr(diary, "diastolic", 0) or 0) if diary else 0
-            bmi       = int(getattr(diary, "bmi", 0) or 0) if diary else 0
-            pulse     = int(getattr(diary, "pulse", 0) or 0) if diary else 0
-            meal      = int(getattr(diary, "meal", 0) or 0) if diary else 0
-
-            # --- tag → [[String]]（不做 json.loads）---
-            tag_raw = getattr(diary, "tag", None) if diary else None
-            tag_2d = [[]]
-            if isinstance(tag_raw, list):
-                rows = []
-                for item in tag_raw:
-                    if isinstance(item, list):
-                        rows.append([str(x) for x in item])
-                    elif isinstance(item, dict):
-                        names = item.get("name") if "name" in item else None
-                        rows.append([str(x) for x in names] if isinstance(names, list) else [])
-                tag_2d = rows if rows else [[]]
-            elif isinstance(tag_raw, dict):
-                names = tag_raw.get("name") if "name" in tag_raw else None
-                tag_2d = [[str(x) for x in names]] if isinstance(names, list) else [[]]
-            else:
-                tag_2d = [[]]
-
-            # --- image → [String]（不做 json.loads）---
-            image_raw = getattr(diary, "image", None) if diary else None
-            if isinstance(image_raw, list):
-                image_1d = [str(x) for x in image_raw]
-            elif isinstance(image_raw, str):
-                image_1d = [image_raw]
-            else:
-                image_1d = []
-
-            # --- location → {"lat": "string", "lng": "string", "address": "string"} ---
-            location_raw = getattr(diary, "location", None) if diary else None
-            lat_str = ""
-            lng_str = ""
-            addr_str = ""
-            if isinstance(location_raw, dict):
-                lat_str = str(location_raw.get("lat") or location_raw.get("latitude") or location_raw.get("y") or "")
-                lng_candidate = (location_raw.get("lng") or location_raw.get("lon") or
-                                location_raw.get("long") or location_raw.get("longitude") or
-                                location_raw.get("x") or "")
-                lng_str = str(lng_candidate)
-                addr_str = str(location_raw.get("address") or location_raw.get("name") or
-                            location_raw.get("text") or location_raw.get("display_name") or "")
-            elif isinstance(location_raw, list) and len(location_raw) >= 2:
-                # 支援 [lat, lng]
-                lat_str = str(location_raw[0] if location_raw[0] is not None else "")
-                lng_str = str(location_raw[1] if location_raw[1] is not None else "")
-            elif isinstance(location_raw, str) and ("," in location_raw):
-                parts = [p.strip() for p in location_raw.split(",")]
-                if len(parts) >= 2:
-                    lat_str = parts[0]
-                    lng_str = parts[1]
+            # 參數驗證 - 處理路徑參數(字串類型)
+            # 前端對應: 醫師團=0, 親友團=1, 控糖團=2
+            print(f"Original relation_type: {relation_type}, type: {type(relation_type)}")
+            
+            try:
+                # 路徑參數都是字串，需要轉換
+                if isinstance(relation_type, str):
+                    relation_type = relation_type.strip()
+                    print(f"Stripped relation_type: '{relation_type}'")
+                    
+                    # 檢查是否為數字字串
+                    if not relation_type.isdigit():
+                        print(f"relation_type is not digit: '{relation_type}'")
+                        return {"status": "1", "message": "type 參數格式錯誤"}, 400
+                        
+                    relation_type_int = int(relation_type)
+                elif isinstance(relation_type, int):
+                    relation_type_int = relation_type
                 else:
-                    addr_str = location_raw
-            elif isinstance(location_raw, str):
-                addr_str = location_raw
-            location_obj = {"lat": lat_str, "lng": lng_str, "address": addr_str}
+                    print(f"Unexpected relation_type type: {type(relation_type)}")
+                    return {"status": "1", "message": "type 參數格式錯誤"}, 400
+                    
+            except (ValueError, TypeError) as e:
+                print(f"Parameter conversion error: {e}")
+                return {"status": "1", "message": "type 參數格式錯誤"}, 400
 
-            # --- user 物件 ---
-            user_obj = {
-                "id": user.id,
-                "name": user.name or "",
-                "email": user.email or "",
-                "account": user.account or "",
-            }
+            print(f"Converted relation_type_int: {relation_type_int}")
 
-            # --- recorded_at → String（ISO8601Z）---
-            rec_raw = getattr(diary, "recorded_at", None) if diary else None
-            if isinstance(rec_raw, datetime):
-                if rec_raw.tzinfo is None:
-                    rec_raw = rec_raw.replace(tzinfo=tz_utc)
-                recorded_at = rec_raw.astimezone(tz_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            elif isinstance(rec_raw, (int, float)):
-                recorded_at = datetime.fromtimestamp(float(rec_raw), tz=tz_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            elif isinstance(rec_raw, str):
-                recorded_at = rec_raw or ""
-            else:
-                recorded_at = ""
+            if relation_type_int not in (0, 1, 2):
+                print(f"Invalid relation_type_int: {relation_type_int}")
+                return {"status": "1", "message": "type 參數無效"}, 400
 
-            # --- shared_at（來自 share；先預設字串，再覆蓋） ---
-            shared_at = ""
-            shared_at_dt = getattr(share, "shared_at", None)
-            if isinstance(shared_at_dt, datetime):
-                if shared_at_dt.tzinfo is None:
-                    shared_at_dt = shared_at_dt.replace(tzinfo=tz_utc)
-                shared_at = shared_at_dt.astimezone(tz_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            # 對應關係確認
+            type_names = {0: "醫師團", 1: "親友團", 2: "控糖團"}
+            print(f"Requesting records for: {type_names.get(relation_type_int, 'Unknown')}")
 
-            # --- created_at（來自 diary） ---
-            created_at_dt = getattr(diary, "created_at", None) if diary else None
-            if isinstance(created_at_dt, datetime):
-                created_at = created_at_dt.strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                created_at = ""
+            # 2) 查詢分享記錄
+            try:
+                print(f"Querying ShareRecord table for user_id: {user.id}")
+                
+                print(f"Querying share records for user with relation_type: {relation_type_int} ({type_names.get(relation_type_int)})")
+                share_records = ShareRecord.query.filter_by(
+                    user_id=user.id, 
+                    relation_type=relation_type_int
+                ).all()
+                
+                print(f"Found {len(share_records)} share records")
+                
+                # 如果沒有找到記錄，輸出更多調試信息
+                if len(share_records) == 0:
+                    print("No share records found, checking total records for this user...")
+                    all_user_shares = ShareRecord.query.filter_by(user_id=user.id).all()
+                    print(f"User has {len(all_user_shares)} total share records")
+                    for share in all_user_shares:
+                        print(f"  Share ID: {share.id}, relation_type: {getattr(share, 'relation_type', 'None')}")
+                
+            except Exception as e:
+                print(f"Database query error in ShareRecord: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return {"status": "1", "message": "查詢資料失敗"}, 500
 
-            # --- 其它字串欄位 ---
-            message_str = str(getattr(diary, "message", "") or "") if diary else ""
-            url_str = str(getattr(diary, "url", "") or "") if diary else ""
-            relation_id_val = getattr(share, "relation_id", None)
-            relation_id = int(relation_id_val) if isinstance(relation_id_val, (int, float, str)) and str(relation_id_val).lstrip("-").isdigit() else 0
+            # 統一使用 timezone.utc
+            tz_utc = timezone.utc
+            records_list = []
 
-            # --- 組裝（包含前端要求的欄位名稱/型別）---
-            record_data = {
-                "id": share.id,
-                "user_id": share.user_id,
-                "relation_id": relation_id,
-                "user": user_obj,
-                "type": int(getattr(share, "record_type", 0) or 0),   # 前端要的 type
-                "record_type": int(getattr(share, "record_type", 0) or 0),
+            for i, share in enumerate(share_records):
+                print(f"Processing share record {i+1}/{len(share_records)}: ID={share.id}, record_id={getattr(share, 'record_id', 'None')}")
+                
+                try:
+                    # 檢查必要屬性
+                    if not hasattr(share, 'record_id') or share.record_id is None:
+                        print(f"Share record {share.id} has invalid record_id: {getattr(share, 'record_id', 'None')}")
+                        continue
 
-                "weight": float(getattr(diary, "weight", 0.0) or 0.0) if diary else 0.0,
-                "body_fat": float(getattr(diary, "body_fat", 0.0) or 0.0) if diary else 0.0,
-                "sugar": float(getattr(diary, "sugar", 0.0) or 0.0) if diary else 0.0,
-                "meal_type": int(getattr(diary, "meal_type", 0) or 0) if diary else 0,
-                "bmi": bmi,
+                    # 檢查 record_type 確保查詢正確的表
+                    share_record_type = getattr(share, 'record_type', None)
+                    print(f"Share record_type: {share_record_type}")
+                    
+                    # 根據 record_type 決定查詢哪個表
+                    # 假設: 0=日記, 1=血壓, 2=血糖, 3=其他
+                    diary = None
+                    try:
+                        print(f"Querying diary with id: {share.record_id}")
+                        
+                        # 這裡需要根據您的實際數據庫結構調整
+                        # 如果不同 record_type 對應不同的表，請修改這裡
+                        diary = Diary.query.filter_by(id=share.record_id).first()
+                        
+                        if diary:
+                            print(f"Found diary record: {diary.id}")
+                        else:
+                            print(f"No diary found for record_id: {share.record_id}")
+                            # 檢查記錄是否存在於其他表中
+                            print(f"Checking if record_id {share.record_id} exists in database...")
+                            
+                    except Exception as e:
+                        print(f"Diary query error for record_id {share.record_id}: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
+                        continue
 
-                "shared_at": shared_at,
-                "recorded_at": recorded_at,
-                "created_at": created_at,
+                    # 安全轉換函數
+                    def safe_int(value, default=0, field_name=""):
+                        try:
+                            if value is None:
+                                return default
+                            if isinstance(value, str) and value.strip() == "":
+                                return default
+                            result = int(float(value))
+                            return result
+                        except (ValueError, TypeError) as e:
+                            if field_name:
+                                print(f"safe_int conversion error for {field_name} '{value}': {e}")
+                            return default
 
-                "meal": meal,
-                "timeperiod": int(getattr(diary, "timeperiod", 0) or 0) if diary else 0,
+                    def safe_float(value, default=0.0, field_name=""):
+                        try:
+                            if value is None:
+                                return default
+                            if isinstance(value, str) and value.strip() == "":
+                                return default
+                            result = float(value)
+                            return result
+                        except (ValueError, TypeError) as e:
+                            if field_name:
+                                print(f"safe_float conversion error for {field_name} '{value}': {e}")
+                            return default
 
-                "tag": tag_2d,            # [[String]]
-                "image": image_1d,        # [String]
-                "location": location_obj, # {"lat": "","lng": "","address": ""}
+                    def safe_str(value, default="", field_name=""):
+                        try:
+                            if value is None:
+                                return default
+                            return str(value)
+                        except Exception as e:
+                            if field_name:
+                                print(f"safe_str conversion error for {field_name} '{value}': {e}")
+                            return default
 
-                "relation_type": int(getattr(share, "relation_type", 0) or 0),
-                "systolic": systolic,
-                "diastolic": diastolic,
-                "pulse": pulse,
+                    # 基本數值欄位
+                    systolic = safe_int(getattr(diary, "systolic", 0) if diary else 0, 0, "systolic")
+                    diastolic = safe_int(getattr(diary, "diastolic", 0) if diary else 0, 0, "diastolic")
+                    bmi = safe_int(getattr(diary, "bmi", 0) if diary else 0, 0, "bmi")
+                    pulse = safe_int(getattr(diary, "pulse", 0) if diary else 0, 0, "pulse")
+                    meal = safe_int(getattr(diary, "meal", 0) if diary else 0, 0, "meal")
+                    weight = safe_float(getattr(diary, "weight", 0.0) if diary else 0.0, 0.0, "weight")
+                    body_fat = safe_float(getattr(diary, "body_fat", 0.0) if diary else 0.0, 0.0, "body_fat")
+                    sugar = safe_float(getattr(diary, "sugar", 0.0) if diary else 0.0, 0.0, "sugar")
 
-                "message": message_str,
-                "url": url_str,
+                    print(f"Processed basic numeric fields for record {share.id}")
 
-                # 避免與頂層 "status"（字串）名稱衝突
-                "record_status": getattr(diary, "status", 0) or 0 if diary else 0,
-            }
+                    # 複雜欄位處理 - tag
+                    tag_2d = [[]]
+                    try:
+                        tag_raw = getattr(diary, "tag", None) if diary else None
+                        print(f"Processing tag_raw: {type(tag_raw)}, value preview: {str(tag_raw)[:100] if tag_raw else 'None'}")
+                        
+                        if tag_raw is not None:
+                            if isinstance(tag_raw, list):
+                                rows = []
+                                for item in tag_raw:
+                                    if isinstance(item, list):
+                                        rows.append([safe_str(x, "", f"tag_item") for x in item])
+                                    elif isinstance(item, dict):
+                                        names = item.get("name") if "name" in item else None
+                                        if isinstance(names, list):
+                                            rows.append([safe_str(x, "", f"tag_name") for x in names])
+                                        else:
+                                            rows.append([])
+                                    else:
+                                        # 單個值也轉為列表
+                                        rows.append([safe_str(item, "", "tag_single")])
+                                tag_2d = rows if rows else [[]]
+                            elif isinstance(tag_raw, dict):
+                                names = tag_raw.get("name")
+                                if isinstance(names, list):
+                                    tag_2d = [[safe_str(x, "", "tag_dict_name") for x in names]]
+                                else:
+                                    tag_2d = [[safe_str(names, "", "tag_dict_single")] if names else []]
+                            elif isinstance(tag_raw, str):
+                                # 字串可能是 JSON 格式，嘗試解析
+                                try:
+                                    import json
+                                    parsed = json.loads(tag_raw)
+                                    if isinstance(parsed, list):
+                                        tag_2d = [[safe_str(x, "", "tag_json") for x in parsed]]
+                                    else:
+                                        tag_2d = [[safe_str(tag_raw, "", "tag_str")]]
+                                except:
+                                    tag_2d = [[safe_str(tag_raw, "", "tag_str_fallback")]]
+                            else:
+                                tag_2d = [[safe_str(tag_raw, "", "tag_other")]]
+                                
+                    except Exception as e:
+                        print(f"Tag processing error for record {share.id}: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
+                        tag_2d = [[]]
 
-            records_list.append(record_data)
+                    # 複雜欄位處理 - image
+                    image_1d = []
+                    try:
+                        image_raw = getattr(diary, "image", None) if diary else None
+                        print(f"Processing image_raw: {type(image_raw)}")
+                        
+                        if image_raw is not None:
+                            if isinstance(image_raw, list):
+                                image_1d = [safe_str(x, "", "image_item") for x in image_raw if x is not None]
+                            elif isinstance(image_raw, str):
+                                if image_raw.strip():
+                                    # 可能是 JSON 字串
+                                    try:
+                                        import json
+                                        parsed = json.loads(image_raw)
+                                        if isinstance(parsed, list):
+                                            image_1d = [safe_str(x, "", "image_json") for x in parsed if x is not None]
+                                        else:
+                                            image_1d = [safe_str(image_raw, "", "image_str")]
+                                    except:
+                                        image_1d = [safe_str(image_raw, "", "image_str_fallback")]
+                            else:
+                                image_1d = [safe_str(image_raw, "", "image_other")]
+                                
+                    except Exception as e:
+                        print(f"Image processing error for record {share.id}: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
+                        image_1d = []
 
-        return {"status": "0", "message": "成功", "records": records_list}, 200
+                    # 複雜欄位處理 - location
+                    location_obj = {"lat": "", "lng": "", "address": ""}
+                    try:
+                        location_raw = getattr(diary, "location", None) if diary else None
+                        print(f"Processing location_raw: {type(location_raw)}")
+                        
+                        if location_raw is not None:
+                            if isinstance(location_raw, dict):
+                                lat_val = (location_raw.get("lat") or location_raw.get("latitude") or 
+                                        location_raw.get("y") or "")
+                                lng_val = (location_raw.get("lng") or location_raw.get("lon") or
+                                        location_raw.get("long") or location_raw.get("longitude") or
+                                        location_raw.get("x") or "")
+                                addr_val = (location_raw.get("address") or location_raw.get("name") or
+                                        location_raw.get("text") or location_raw.get("display_name") or "")
+                                
+                                location_obj = {
+                                    "lat": safe_str(lat_val, "", "location_lat"), 
+                                    "lng": safe_str(lng_val, "", "location_lng"), 
+                                    "address": safe_str(addr_val, "", "location_addr")
+                                }
+                            elif isinstance(location_raw, list) and len(location_raw) >= 2:
+                                location_obj = {
+                                    "lat": safe_str(location_raw[0], "", "location_list_lat"), 
+                                    "lng": safe_str(location_raw[1], "", "location_list_lng"), 
+                                    "address": ""
+                                }
+                            elif isinstance(location_raw, str):
+                                if "," in location_raw:
+                                    parts = [p.strip() for p in location_raw.split(",")]
+                                    if len(parts) >= 2:
+                                        location_obj = {"lat": parts[0], "lng": parts[1], "address": ""}
+                                    else:
+                                        location_obj = {"lat": "", "lng": "", "address": location_raw}
+                                else:
+                                    # 可能是 JSON 字串
+                                    try:
+                                        import json
+                                        parsed = json.loads(location_raw)
+                                        if isinstance(parsed, dict):
+                                            lat_val = (parsed.get("lat") or parsed.get("latitude") or parsed.get("y") or "")
+                                            lng_val = (parsed.get("lng") or parsed.get("lon") or parsed.get("longitude") or parsed.get("x") or "")
+                                            addr_val = (parsed.get("address") or parsed.get("name") or "")
+                                            location_obj = {"lat": safe_str(lat_val), "lng": safe_str(lng_val), "address": safe_str(addr_val)}
+                                        else:
+                                            location_obj = {"lat": "", "lng": "", "address": safe_str(location_raw)}
+                                    except:
+                                        location_obj = {"lat": "", "lng": "", "address": safe_str(location_raw)}
+                            else:
+                                location_obj = {"lat": "", "lng": "", "address": safe_str(location_raw, "", "location_fallback")}
+                                
+                    except Exception as e:
+                        print(f"Location processing error for record {share.id}: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
+                        location_obj = {"lat": "", "lng": "", "address": ""}
 
+                    # user 物件
+                    user_obj = {
+                        "id": user.id,
+                        "name": safe_str(user.name, "", "user_name"),
+                        "email": safe_str(user.email, "", "user_email"),
+                        "account": safe_str(user.account, "", "user_account"),
+                    }
+
+                    # 時間處理函數
+                    def safe_datetime_to_iso(dt_value, field_name=""):
+                        try:
+                            if isinstance(dt_value, datetime):
+                                if dt_value.tzinfo is None:
+                                    dt_value = dt_value.replace(tzinfo=tz_utc)
+                                return dt_value.astimezone(tz_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                            elif isinstance(dt_value, (int, float)):
+                                return datetime.fromtimestamp(float(dt_value), tz=tz_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                            elif isinstance(dt_value, str):
+                                return dt_value.strip() if dt_value else ""
+                            else:
+                                return ""
+                        except Exception as e:
+                            print(f"DateTime conversion error for {field_name}: {e}")
+                            return ""
+
+                    def safe_datetime_to_string(dt_value, field_name=""):
+                        try:
+                            if isinstance(dt_value, datetime):
+                                return dt_value.strftime("%Y-%m-%d %H:%M:%S")
+                            else:
+                                return ""
+                        except Exception as e:
+                            print(f"DateTime string conversion error for {field_name}: {e}")
+                            return ""
+
+                    # 時間欄位處理
+                    recorded_at = safe_datetime_to_iso(
+                        getattr(diary, "recorded_at", None) if diary else None, 
+                        "recorded_at"
+                    )
+                    shared_at = safe_datetime_to_iso(
+                        getattr(share, "shared_at", None), 
+                        "shared_at"
+                    )
+                    created_at = safe_datetime_to_string(
+                        getattr(diary, "created_at", None) if diary else None, 
+                        "created_at"
+                    )
+
+                    print(f"Processed datetime fields for record {share.id}")
+
+                    # 組裝最終記錄
+                    try:
+                        record_data = {
+                            "id": share.id,
+                            "user_id": share.user_id,
+                            "relation_id": safe_int(getattr(share, "relation_id", 0), 0, "relation_id"),
+                            "user": user_obj,
+                            "type": safe_int(getattr(share, "record_type", 0), 0, "type"),
+                            "record_type": safe_int(getattr(share, "record_type", 0), 0, "record_type"),
+                            "weight": weight,
+                            "body_fat": body_fat,
+                            "sugar": sugar,
+                            "meal_type": safe_int(getattr(diary, "meal_type", 0) if diary else 0, 0, "meal_type"),
+                            "bmi": bmi,
+                            "shared_at": shared_at,
+                            "recorded_at": recorded_at,
+                            "created_at": created_at,
+                            "meal": meal,
+                            "timeperiod": safe_int(getattr(diary, "timeperiod", 0) if diary else 0, 0, "timeperiod"),
+                            "tag": tag_2d,
+                            "image": image_1d,
+                            "location": location_obj,
+                            "relation_type": safe_int(getattr(share, "relation_type", 0), 0, "share_relation_type"),
+                            "systolic": systolic,
+                            "diastolic": diastolic,
+                            "pulse": pulse,
+                            "message": safe_str(getattr(diary, "message", "") if diary else "", "", "message"),
+                            "url": safe_str(getattr(diary, "url", "") if diary else "", "", "url"),
+                            "record_status": safe_int(getattr(diary, "status", 0) if diary else 0, 0, "record_status"),
+                        }
+
+                        records_list.append(record_data)
+                        print(f"Successfully processed and added record {share.id}")
+                        
+                    except Exception as e:
+                        print(f"Error assembling record data for share {share.id}: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
+                        continue
+                    
+                except Exception as e:
+                    print(f"Error processing share record {share.id}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+
+            print(f"Returning {len(records_list)} processed records out of {len(share_records)} total share records")
+            return {"status": "0", "message": "成功", "records": records_list}, 200
+
+        except Exception as e:
+            print(f"get_shared_records critical error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {"status": "1", "message": "獲取分享記錄失敗"}, 500
 
 
 
@@ -2342,28 +2556,229 @@ class AuthController:
         
 
 
-
     @staticmethod
     def send_friend_invite(email, invite_code, relation_type):
-        # 檢查邀請碼的有效性
-        user = User.query.filter_by(email=email).first()
+        try:
+        # 查詢發送邀請的使用者
+            user = User.query.filter_by(email=email).first()
+            if not user:
+                return {
+                    "status": "1",
+                    "message": "使用者不存在"
+                }, 404
 
-        if not user:
-            return
-        
-        # 檢查邀請碼是否有效
-        if not AuthController.is_valid_invite_code(invite_code):
-            return
-        
-        # 檢查是否已經是好友
-        if AuthController.is_already_friend(user.id, invite_code):
-            return
-        
-        # 邏輯來發送邀請或添加好友
-        # 這裡可以根據您的需求進行實作
-        # 例如：發送電子郵件或通知
+            # 驗證參數
+            if not invite_code or not invite_code.strip():
+                return {
+                    "status": "1",
+                    "message": "邀請碼不能為空"
+                }, 400
 
-        return {
-            "status": "0",
-            "message": "邀請已發送"
-        }, 200
+            # 驗證 relation_type
+            try:
+                relation_type = int(relation_type)
+                if relation_type not in [0, 1, 2]:
+                    return {
+                        "status": "1",
+                        "message": "relation_type 參數無效"
+                    }, 400
+            except (ValueError, TypeError):
+                return {
+                    "status": "1",
+                    "message": "relation_type 必須為整數"
+                }, 400
+
+            # 檢查邀請碼是否有效（透過邀請碼找到目標使用者）
+            target_user = AuthController.find_user_by_invite_code(invite_code)
+            if not target_user:
+                return {
+                    "status": "1",
+                    "message": "邀請碼無效"
+                }, 400
+
+            # 檢查是否是自己邀請自己
+            if target_user.id == user.id:
+                return {
+                    "status": "1",
+                    "message": "不能邀請自己"
+                }, 400
+
+            # 檢查是否已經是好友
+            if AuthController.is_already_friend(user.id, target_user.id, relation_type):
+                return {
+                    "status": "2",
+                    "message": "已經成為好友"
+                }, 200
+
+            # 建立好友邀請記錄
+            friend_result = FriendResult(
+                user_id=user.id,
+                relation_id=target_user.id,
+                type=relation_type,
+                status=0,  # 0: 待處理, 1: 接受, 2: 拒絕
+                read=0,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc)
+            )
+            db.session.add(friend_result)
+            db.session.commit()
+
+            return {
+                "status": "0",
+                "message": "邀請已發送"
+            }, 200
+
+        except Exception as e:
+            db.session.rollback()
+            print(f"Send friend invite error: {str(e)}")
+            return {
+                "status": "1",
+                "message": "發送邀請失敗"
+            }, 500
+
+    @staticmethod
+    def find_user_by_invite_code(invite_code):
+        """
+        根據邀請碼找到對應的使用者
+        這裡假設邀請碼是動態生成的，需要反推出 user_id
+        """
+        try:
+            # 如果您的邀請碼包含 user_id 資訊，可以解析出來
+            # 這裡提供一個簡單的實作範例
+            
+            # 方法1: 如果邀請碼是簡單的數字格式（如前4位是user_id）
+            # if invite_code.isdigit() and len(invite_code) >= 4:
+            #     user_id = int(invite_code[:4])
+            #     return User.query.filter_by(id=user_id).first()
+            
+            # 方法2: 遍歷所有使用者生成邀請碼並比對（效率較低，適合小量使用者）
+            users = User.query.all()
+            for user in users:
+                # 使用相同邏輯生成邀請碼並比對
+                # 注意：這個方法有時間差問題，實際應用中建議將邀請码存在資料庫
+                pass
+            
+            # 方法3: 建議在資料庫中新增邀請碼欄位
+            # return User.query.filter_by(invite_code=invite_code).first()
+            
+            return None
+            
+        except Exception as e:
+            print(f"Find user by invite code error: {str(e)}")
+            return None
+
+    @staticmethod
+    def is_already_friend(user_id, target_user_id, relation_type):
+        """
+        檢查兩個使用者是否已經是指定類型的好友
+        """
+        try:
+            # 檢查是否已有好友關係
+            existing_friend = Friend.query.filter_by(
+                user_id=user_id,
+                relation_type=relation_type
+            ).join(User, User.id == target_user_id).first()
+            
+            return existing_friend is not None
+            
+        except Exception as e:
+            print(f"Is already friend error: {str(e)}")
+            return False
+
+    @staticmethod
+    def find_user_by_invite_code(invite_code):
+        """
+        根據邀請碼找到對應的使用者
+        這裡假設邀請碼是動態生成的，需要反推出 user_id
+        """
+        try:
+            # 如果您的邀請碼包含 user_id 資訊，可以解析出來
+            # 這裡提供一個簡單的實作範例
+            
+            # 方法1: 如果邀請碼是簡單的數字格式（如前4位是user_id）
+            # if invite_code.isdigit() and len(invite_code) >= 4:
+            #     user_id = int(invite_code[:4])
+            #     return User.query.filter_by(id=user_id).first()
+            
+            # 方法2: 遍歷所有使用者生成邀請碼並比對（效率較低，適合小量使用者）
+            users = User.query.all()
+            for user in users:
+                # 使用相同邏輯生成邀請碼並比對
+                # 注意：這個方法有時間差問題，實際應用中建議將邀請碼存在資料庫
+                pass
+            
+            # 方法3: 建議在資料庫中新增邀請碼欄位
+            # return User.query.filter_by(invite_code=invite_code).first()
+            
+            return None
+            
+        except Exception as e:
+            print(f"Find user by invite code error: {str(e)}")
+            return None
+
+    @staticmethod
+    def is_already_friend(user_id, target_user_id, relation_type):
+        """
+        檢查兩個使用者是否已經是指定類型的好友
+        """
+        try:
+            # 檢查是否已有好友關係
+            existing_friend = Friend.query.filter_by(
+                user_id=user_id,
+                relation_type=relation_type
+            ).join(User, User.id == target_user_id).first()
+            
+            return existing_friend is not None
+            
+        except Exception as e:
+            print(f"Is already friend error: {str(e)}")
+            return False
+
+    @staticmethod
+    def find_user_by_invite_code(invite_code):
+        """
+        根據邀請碼找到對應的使用者
+        這裡假設邀請碼是動態生成的，需要反推出 user_id
+        """
+        try:
+            # 如果您的邀請碼包含 user_id 資訊，可以解析出來
+            # 這裡提供一個簡單的實作範例
+            
+            # 方法1: 如果邀請碼是簡單的數字格式（如前4位是user_id）
+            # if invite_code.isdigit() and len(invite_code) >= 4:
+            #     user_id = int(invite_code[:4])
+            #     return User.query.filter_by(id=user_id).first()
+            
+            # 方法2: 遍歷所有使用者生成邀請碼並比對（效率較低，適合小量使用者）
+            users = User.query.all()
+            for user in users:
+                # 使用相同邏輯生成邀請碼並比對
+                # 注意：這個方法有時間差問題，實際應用中建議將邀請碼存在資料庫
+                pass
+            
+            # 方法3: 建議在資料庫中新增邀請碼欄位
+            # return User.query.filter_by(invite_code=invite_code).first()
+            
+            return None
+            
+        except Exception as e:
+            print(f"Find user by invite code error: {str(e)}")
+            return None
+
+@staticmethod
+def is_already_friend(user_id, target_user_id, relation_type):
+    """
+    檢查兩個使用者是否已經是指定類型的好友
+    """
+    try:
+        # 檢查是否已有好友關係
+        existing_friend = Friend.query.filter_by(
+            user_id=user_id,
+            relation_type=relation_type
+        ).join(User, User.id == target_user_id).first()
+        
+        return existing_friend is not None
+        
+    except Exception as e:
+        print(f"Is already friend error: {str(e)}")
+        return False
