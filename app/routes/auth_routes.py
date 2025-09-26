@@ -327,6 +327,9 @@ def get_care_records():
         }), 500
 
 
+
+
+
 @auth_bp.post("/share")
 @jwt_required()
 def add_share():
@@ -341,16 +344,25 @@ def add_share():
             }), 422
         
         data = request.get_json(silent=True) or {}
-        
+        print(f"Received share data: {data}")  # 調試用
+
         record_type = data.get('type')
         record_id = data.get('id')
         relation_type = data.get('relation_type')
         
-        # 驗證必要參數
-        if record_type is None or record_id is None or relation_type is None:
+        # 詳細的參數檢查
+        missing_params = []
+        if record_type is None:
+            missing_params.append('type')
+        if record_id is None:
+            missing_params.append('id')
+        if relation_type is None:
+            missing_params.append('relation_type')
+            
+        if missing_params:
             return jsonify({
                 "status": "1",
-                "message": "缺少必要參數"
+                "message": f"缺少必要參數: {', '.join(missing_params)}"
             }), 400
             
         # 型態驗證
@@ -358,10 +370,17 @@ def add_share():
             record_type = int(record_type)
             record_id = int(record_id)
             relation_type = int(relation_type)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as e:
             return jsonify({
                 "status": "1",
-                "message": "參數型態錯誤"
+                "message": f"參數型態錯誤: {str(e)}"
+            }), 400
+        
+        # 驗證 relation_type 範圍
+        if relation_type not in [0, 1, 2]:
+            return jsonify({
+                "status": "1",
+                "message": "relation_type 必須為 0(醫師團), 1(親友團), 或 2(糖友團)"
             }), 400
         
         result, status = AuthController.add_share_record(email, record_type, record_id, relation_type)
@@ -374,6 +393,9 @@ def add_share():
             "status": "1",
             "message": "分享失敗"
         }), 500
+
+
+
 
 @auth_bp.get("/share/<relation_type>")
 @jwt_required()
@@ -398,6 +420,9 @@ def get_shared_records(relation_type):
             "status": "1",
             "message": "取得分享記錄失敗"
         }), 500
+
+
+
 
 
 @auth_bp.get("/news")
@@ -447,6 +472,8 @@ def get_friend_list():
             "status": "1",
             "message": "取得好友列表失敗"
         }), 500
+
+
 
 @auth_bp.post("/friend")
 @jwt_required()
@@ -678,6 +705,10 @@ def get_friend_invite_code():
             "message": "取得邀請碼失敗"
         }), 500
 
+
+
+
+
 @auth_bp.get("/friend/results")
 @jwt_required()
 def get_friend_results():
@@ -698,6 +729,11 @@ def get_friend_results():
             "status": "1",
             "message": "取得邀請結果失敗"
         }), 500
+
+
+
+
+
 
 @auth_bp.get("/friend/requests")
 @jwt_required()
@@ -811,7 +847,6 @@ def add_blood_pressure():
 @auth_bp.post("/friend/send")
 @jwt_required()
 def send_friend_invite():
-    print("Send friend invite endpoint called")  # 調試輸出
     try:
         email = get_jwt_identity()
         
@@ -850,4 +885,73 @@ def send_friend_invite():
         return jsonify({
             "status": "1",
             "message": "發送邀請失敗"
+        }), 500
+
+@auth_bp.get("/friend/<int:invite_id>/accept")
+@jwt_required()
+def accept_friend_invite(invite_id):
+    print("Accept friend invite endpoint called")
+    try:
+        email = get_jwt_identity()
+        if not isinstance(email, str):
+            return jsonify({
+                "status": "1",
+                "message": "無效的使用者識別"
+            }), 422
+
+        result, status = AuthController.accept_friend_invite(email, invite_id)
+        return jsonify(result), status
+
+    except Exception as e:
+        print(f"Accept friend invite route error: {str(e)}")
+        return jsonify({
+            "status": "1",
+            "message": "接受邀請失敗"
+        }), 500
+
+@auth_bp.get("/friend/<int:invite_id>/refuse")
+@jwt_required()
+def refuse_friend_invite(invite_id):
+    print("Refuse friend invite endpoint called")
+    try:
+        email = get_jwt_identity()
+        if not isinstance(email, str):
+            return jsonify({
+                "status": "1",
+                "message": "無效的使用者識別"
+            }), 422
+
+        result, status = AuthController.refuse_friend_invite(email, invite_id)
+        return jsonify(result), status
+
+    except Exception as e:
+        print(f"Refuse friend invite route error: {str(e)}")
+        return jsonify({
+            "status": "1",
+            "message": "拒絕邀請失敗"
+        }), 500
+
+@auth_bp.delete("/friend/remove")
+@jwt_required()
+def remove_friends():
+    print("Remove friends endpoint called")
+    try:
+        email = get_jwt_identity()
+        if not isinstance(email, str):
+            return jsonify({
+                "status": "1",
+                "message": "無效的使用者識別"
+            }), 422
+
+        data = request.get_json(silent=True) or {}
+        ids = data.get("ids[]", [])
+
+        result, status = AuthController.remove_friends(email, ids)
+        return jsonify(result), status
+
+    except Exception as e:
+        print(f"Remove friends route error: {str(e)}")
+        return jsonify({
+            "status": "1",
+            "message": "刪除好友失敗"
         }), 500

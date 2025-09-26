@@ -1174,6 +1174,10 @@ class AuthController:
                 "message": "取得 Care 記錄失敗"
             }, 500
 
+    
+
+
+
     @staticmethod
     def add_share_record(email: str, record_type: int, record_id: int, relation_type: int):
         print("Adding share record...")
@@ -1203,6 +1207,14 @@ class AuthController:
                 return {
                     "status": "1",
                     "message": "record_id 參數無效"
+                }, 400
+            
+            # 新增：檢查使用者是否有對應類型的好友
+            if not AuthController.has_friend_in_relation(user.id, relation_type):
+                relation_names = {0: "醫師團", 1: "親友團", 2: "糖友團"}
+                return {
+                    "status": "1",
+                    "message": f"您尚未加入{relation_names.get(relation_type, '該')}，請先新增好友"
                 }, 400
             
             # 檢查是否已經分享過相同記錄
@@ -1235,12 +1247,32 @@ class AuthController:
             }, 200
             
         except Exception as e:
-            print(f"add_share_record error: {str(e)}")  # 添加詳細錯誤日誌
+            print(f"add_share_record error: {str(e)}")
             db.session.rollback()
             return {
                 "status": "1",
                 "message": "分享失敗"
             }, 500
+
+    # 新增輔助方法：檢查使用者是否有特定關係類型的好友
+    @staticmethod
+    def has_friend_in_relation(user_id: int, relation_type: int) -> bool:
+        """
+        檢查使用者是否有指定關係類型的好友
+        """
+        try:
+            # 查詢該使用者是否有指定類型的好友
+            friend = Friend.query.filter_by(
+                user_id=user_id,
+                relation_type=relation_type
+            ).first()
+            
+            # 如果有找到好友記錄，返回 True
+            return friend is not None
+            
+        except Exception as e:
+            print(f"Check friend relation error: {str(e)}")
+            return False
 
     @staticmethod
     def get_shared_records(email: str, relation_type):
@@ -1539,7 +1571,7 @@ class AuthController:
                         print(f"Location processing error for record {share.id}: {str(e)}")
                         import traceback
                         traceback.print_exc()
-                        location_obj = {"lat": "", "lng": "", "address": ""}
+                        location_obj = {"lat": "", "lng": "", "address": safe_str(location_raw, "", "location_fallback")}
 
                     # user 物件
                     user_obj = {
@@ -2151,38 +2183,47 @@ class AuthController:
                     "status": "1",
                     "message": "使用者不存在"
                 }, 404
-
-            # 假設 FriendResult 是您的邀請結果模型
+                
             friend_results = FriendResult.query.filter_by(user_id=user.id).order_by(FriendResult.created_at.desc()).all()
-
             results_list = []
+            
             for result in friend_results:
                 # 查詢關聯的使用者資料
                 relation_user = User.query.filter_by(id=result.relation_id).first()
-                relation_info = {
-                    "id": result.relation_id,
-                    "name": getattr(relation_user, "name", None),
-                    "account": getattr(relation_user, "account", "")
-                }
-
+                
+                # 確保所有欄位都不會是 None 或 null
+                if relation_user:
+                    relation_info = {
+                        "id": result.relation_id,
+                        "name": relation_user.name if relation_user.name is not None else "",
+                        "account": relation_user.account if relation_user.account is not None else ""
+                    }
+                else:
+                    # 如果找不到關聯使用者，提供預設值
+                    relation_info = {
+                        "id": result.relation_id,
+                        "name": "",
+                        "account": ""
+                    }
+                
                 results_list.append({
                     "id": result.id,
                     "user_id": result.user_id,
                     "relation_id": result.relation_id,
-                    "type": result.type,
-                    "status": result.status,
-                    "read": result.read,
+                    "type": result.type if result.type is not None else "",
+                    "status": result.status if result.status is not None else "",
+                    "read": int(result.read) if result.read is not None else 0,
                     "created_at": result.created_at.strftime("%Y-%m-%d %H:%M:%S") if result.created_at else "",
                     "updated_at": result.updated_at.strftime("%Y-%m-%d %H:%M:%S") if result.updated_at else "",
                     "relation": relation_info
                 })
-
+                
             return {
                 "status": "0",
                 "message": "成功",
                 "results": results_list
             }, 200
-
+            
         except Exception as e:
             print(f"Get friend results error: {str(e)}")
             return {
@@ -2190,6 +2231,7 @@ class AuthController:
                 "message": "取得邀請結果失敗"
             }, 500
     
+
     @staticmethod
     def get_friend_requests(email: str):
         print("Getting friend requests...")
@@ -2453,7 +2495,7 @@ class AuthController:
 
 
     @staticmethod
-    def add_blood_pressure(email: str, systolic: int, diastolic: int, pulse: int, recorded_at: str = None):
+    def add_blood_pressure(email: str, systolic, diastolic, pulse, recorded_at: str = None):
         try:
             user = User.query.filter_by(email=email).first()
             if not user:
@@ -2462,22 +2504,30 @@ class AuthController:
                     "message": "使用者不存在"
                 }, 404
 
-            # 驗證參數
-            # try:
-            #     systolic = int(systolic)
-            #     diastolic = int(diastolic)
-            #     pulse = int(pulse)
-            # except (ValueError, TypeError):
-            #     return {
-            #         "status": "1",
-            #         "message": "血壓或心跳必須為整數"
-            #     }, 400
+            # 重新啟用參數驗證 - 這是關鍵修正
+            if systolic is None or diastolic is None or pulse is None:
+                return {
+                    "status": "1",
+                    "message": "血壓或心跳參數不能為空"
+                }, 400
 
+            # 安全的型態轉換，支援字串和數字
+            try:
+                systolic = int(float(systolic)) if systolic is not None else 0
+                diastolic = int(float(diastolic)) if diastolic is not None else 0
+                pulse = int(float(pulse)) if pulse is not None else 0
+            except (ValueError, TypeError):
+                return {
+                    "status": "1",
+                    "message": "血壓或心跳必須為數字"
+                }, 400
+
+            # 現在可以安全地進行數值比較
             if systolic <= 0 or diastolic <= 0 or pulse <= 0:
                 return {
                     "status": "1",
                     "message": "血壓或心跳值無效"
-                }, 401
+                }, 400
 
             # 處理記錄時間
             if recorded_at:
@@ -2512,6 +2562,7 @@ class AuthController:
         except Exception as e:
             db.session.rollback()
             print(f"Add blood pressure error: {str(e)}")
+            print(traceback.format_exc())
             return {
                 "status": "1",
                 "message": "新增血壓記錄失敗",
@@ -2530,16 +2581,11 @@ class AuthController:
                     "message": "使用者不存在"
                 }, 404
 
-            # 導入必要模組
-            import hashlib
-            import time
-            
-            timestamp = str(int(time.time()))
-            random_num = str(random.randint(1000, 9999))
-            raw_string = f"{user.id}_{timestamp}_{random_num}"
-            
-            # 生成 8 位邀請碼
-            invite_code = hashlib.md5(raw_string.encode()).hexdigest()[:8].upper()
+            # 生成基於 user_id 的固定格式邀請碼
+            # 格式：用戶ID(4位) + 隨機數(4位)
+            user_id_str = f"{user.id:04d}"  # 補零到4位數
+            random_suffix = f"{random.randint(1000, 9999)}"
+            invite_code = user_id_str + random_suffix
             
             return {
                 "status": "0",
@@ -2553,8 +2599,6 @@ class AuthController:
                 "status": "1",
                 "message": "取得邀請碼失敗"
             }, 500
-        
-
 
     @staticmethod
     def send_friend_invite(email, invite_code, relation_type):
@@ -2597,11 +2641,11 @@ class AuthController:
                 }, 400
 
             # 檢查是否是自己邀請自己
-            if target_user.id == user.id:
-                return {
-                    "status": "1",
-                    "message": "不能邀請自己"
-                }, 400
+            # if target_user.id == user.id:
+            #     return {
+            #         "status": "1",
+            #         "message": "不能邀請自己"
+            #     }, 400
 
             # 檢查是否已經是好友
             if AuthController.is_already_friend(user.id, target_user.id, relation_type):
@@ -2640,28 +2684,18 @@ class AuthController:
     def find_user_by_invite_code(invite_code):
         """
         根據邀請碼找到對應的使用者
-        這裡假設邀請碼是動態生成的，需要反推出 user_id
+        邀請碼格式：前4位是 user_id，後4位是隨機數
         """
         try:
-            # 如果您的邀請碼包含 user_id 資訊，可以解析出來
-            # 這裡提供一個簡單的實作範例
+            if not invite_code or len(invite_code) != 8:
+                return None
             
-            # 方法1: 如果邀請碼是簡單的數字格式（如前4位是user_id）
-            # if invite_code.isdigit() and len(invite_code) >= 4:
-            #     user_id = int(invite_code[:4])
-            #     return User.query.filter_by(id=user_id).first()
-            
-            # 方法2: 遍歷所有使用者生成邀請碼並比對（效率較低，適合小量使用者）
-            users = User.query.all()
-            for user in users:
-                # 使用相同邏輯生成邀請碼並比對
-                # 注意：這個方法有時間差問題，實際應用中建議將邀請码存在資料庫
-                pass
-            
-            # 方法3: 建議在資料庫中新增邀請碼欄位
-            # return User.query.filter_by(invite_code=invite_code).first()
-            
-            return None
+            # 解析邀請碼前4位作為 user_id
+            try:
+                user_id = int(invite_code[:4])
+                return User.query.filter_by(id=user_id).first()
+            except (ValueError, TypeError):
+                return None
             
         except Exception as e:
             print(f"Find user by invite code error: {str(e)}")
@@ -2673,11 +2707,13 @@ class AuthController:
         檢查兩個使用者是否已經是指定類型的好友
         """
         try:
-            # 檢查是否已有好友關係
-            existing_friend = Friend.query.filter_by(
-                user_id=user_id,
-                relation_type=relation_type
-            ).join(User, User.id == target_user_id).first()
+            # 檢查雙向好友關係
+            existing_friend = Friend.query.filter(
+                db.or_(
+                    db.and_(Friend.user_id == user_id, Friend.relation_type == relation_type),
+                    db.and_(Friend.user_id == target_user_id, Friend.relation_type == relation_type)
+                )
+            ).first()
             
             return existing_friend is not None
             
@@ -2686,99 +2722,162 @@ class AuthController:
             return False
 
     @staticmethod
-    def find_user_by_invite_code(invite_code):
+    def accept_friend_invite(email: str, invite_id: int):
         """
-        根據邀請碼找到對應的使用者
-        這裡假設邀請碼是動態生成的，需要反推出 user_id
+        接受控糖團邀請
         """
         try:
-            # 如果您的邀請碼包含 user_id 資訊，可以解析出來
-            # 這裡提供一個簡單的實作範例
-            
-            # 方法1: 如果邀請碼是簡單的數字格式（如前4位是user_id）
-            # if invite_code.isdigit() and len(invite_code) >= 4:
-            #     user_id = int(invite_code[:4])
-            #     return User.query.filter_by(id=user_id).first()
-            
-            # 方法2: 遍歷所有使用者生成邀請碼並比對（效率較低，適合小量使用者）
-            users = User.query.all()
-            for user in users:
-                # 使用相同邏輯生成邀請碼並比對
-                # 注意：這個方法有時間差問題，實際應用中建議將邀請碼存在資料庫
-                pass
-            
-            # 方法3: 建議在資料庫中新增邀請碼欄位
-            # return User.query.filter_by(invite_code=invite_code).first()
-            
-            return None
-            
+            user = User.query.filter_by(email=email).first()
+            if not user:
+                return {
+                    "status": "1",
+                    "message": "使用者不存在"
+                }, 404
+
+            # 查詢邀請記錄
+            invite = FriendResult.query.filter_by(
+                id=invite_id,
+                relation_id=user.id,  # 被邀請者是當前使用者
+                status=0  # 待處理狀態
+            ).first()
+
+            if not invite:
+                return {
+                    "status": "1",
+                    "message": "邀請不存在或已處理"
+                }, 404
+
+            # 更新邀請狀態為接受
+            invite.status = 1  # 1: 接受
+            invite.updated_at = datetime.now(timezone.utc)
+
+            # 建立雙向好友關係
+            # 邀請者 -> 被邀請者
+            friend1 = Friend(
+                user_id=invite.user_id,
+                name=user.name or user.account or f"使用者{user.id}",
+                relation_type=invite.type,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc)
+            )
+
+            # 被邀請者 -> 邀請者
+            inviter = User.query.filter_by(id=invite.user_id).first()
+            friend2 = Friend(
+                user_id=user.id,
+                name=inviter.name or inviter.account or f"使用者{inviter.id}",
+                relation_type=invite.type,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc)
+            )
+
+            db.session.add(friend1)
+            db.session.add(friend2)
+            db.session.commit()
+
+            return {
+                "status": "0",
+                "message": "成功"
+            }, 200
+
         except Exception as e:
-            print(f"Find user by invite code error: {str(e)}")
-            return None
+            db.session.rollback()
+            print(f"Accept friend invite error: {str(e)}")
+            return {
+                "status": "1",
+                "message": "接受邀請失敗"
+            }, 500
 
     @staticmethod
-    def is_already_friend(user_id, target_user_id, relation_type):
+    def refuse_friend_invite(email: str, invite_id: int):
         """
-        檢查兩個使用者是否已經是指定類型的好友
+        拒絕控糖團邀請
         """
         try:
-            # 檢查是否已有好友關係
-            existing_friend = Friend.query.filter_by(
-                user_id=user_id,
-                relation_type=relation_type
-            ).join(User, User.id == target_user_id).first()
-            
-            return existing_friend is not None
-            
+            user = User.query.filter_by(email=email).first()
+            if not user:
+                return {
+                    "status": "1",
+                    "message": "使用者不存在"
+                }, 404
+
+            # 查詢邀請記錄
+            invite = FriendResult.query.filter_by(
+                id=invite_id,
+                relation_id=user.id,  # 被邀請者是當前使用者
+                status=0  # 待處理狀態
+            ).first()
+
+            if not invite:
+                return {
+                    "status": "1",
+                    "message": "邀請不存在或已處理"
+                }, 404
+
+            # 更新邀請狀態為拒絕
+            invite.status = 2  # 2: 拒絕
+            invite.updated_at = datetime.now(timezone.utc)
+            db.session.commit()
+
+            return {
+                "status": "0",
+                "message": "成功"
+            }, 200
+
         except Exception as e:
-            print(f"Is already friend error: {str(e)}")
-            return False
+            db.session.rollback()
+            print(f"Refuse friend invite error: {str(e)}")
+            return {
+                "status": "1",
+                "message": "拒絕邀請失敗"
+            }, 500
 
     @staticmethod
-    def find_user_by_invite_code(invite_code):
+    def remove_friends(email: str, friend_ids: list):
         """
-        根據邀請碼找到對應的使用者
-        這裡假設邀請碼是動態生成的，需要反推出 user_id
+        刪除多個好友
         """
         try:
-            # 如果您的邀請碼包含 user_id 資訊，可以解析出來
-            # 這裡提供一個簡單的實作範例
-            
-            # 方法1: 如果邀請碼是簡單的數字格式（如前4位是user_id）
-            # if invite_code.isdigit() and len(invite_code) >= 4:
-            #     user_id = int(invite_code[:4])
-            #     return User.query.filter_by(id=user_id).first()
-            
-            # 方法2: 遍歷所有使用者生成邀請碼並比對（效率較低，適合小量使用者）
-            users = User.query.all()
-            for user in users:
-                # 使用相同邏輯生成邀請碼並比對
-                # 注意：這個方法有時間差問題，實際應用中建議將邀請碼存在資料庫
-                pass
-            
-            # 方法3: 建議在資料庫中新增邀請碼欄位
-            # return User.query.filter_by(invite_code=invite_code).first()
-            
-            return None
-            
-        except Exception as e:
-            print(f"Find user by invite code error: {str(e)}")
-            return None
+            user = User.query.filter_by(email=email).first()
+            if not user:
+                return {
+                    "status": "1",
+                    "message": "使用者不存在"
+                }, 404
 
-@staticmethod
-def is_already_friend(user_id, target_user_id, relation_type):
-    """
-    檢查兩個使用者是否已經是指定類型的好友
-    """
-    try:
-        # 檢查是否已有好友關係
-        existing_friend = Friend.query.filter_by(
-            user_id=user_id,
-            relation_type=relation_type
-        ).join(User, User.id == target_user_id).first()
-        
-        return existing_friend is not None
-        
-    except Exception as e:
-        print(f"Is already friend error: {str(e)}")
-        return False
+            # 驗證參數
+            if not isinstance(friend_ids, list) or not friend_ids:
+                return {
+                    "status": "1",
+                    "message": "請提供要刪除的好友 ID"
+                }, 400
+
+            # 轉換為整數
+            try:
+                friend_ids = [int(fid) for fid in friend_ids]
+            except (ValueError, TypeError):
+                return {
+                    "status": "1",
+                    "message": "好友 ID 格式錯誤"
+                }, 400
+
+            # 刪除好友記錄
+            deleted_count = Friend.query.filter(
+                Friend.user_id == user.id,
+                Friend.id.in_(friend_ids)
+            ).delete(synchronize_session=False)
+
+            db.session.commit()
+
+            return {
+                "status": "0",
+                "message": "成功"
+            }, 200
+
+        except Exception as e:
+            db.session.rollback()
+            print(f"Remove friends error: {str(e)}")
+            return {
+                "status": "1",
+                "message": "刪除好友失敗"
+            }, 500
