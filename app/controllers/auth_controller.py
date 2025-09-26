@@ -2179,58 +2179,63 @@ class AuthController:
         try:
             user = User.query.filter_by(email=email).first()
             if not user:
-                return {
-                    "status": "1",
-                    "message": "使用者不存在"
-                }, 404
-                
-            friend_results = FriendResult.query.filter_by(user_id=user.id).order_by(FriendResult.created_at.desc()).all()
-            results_list = []
+                return {"status": "1", "message": "使用者不存在"}, 404
+
+            friend_results = (FriendResult.query
+                            .filter_by(user_id=user.id)
+                            .order_by(FriendResult.created_at.desc())
+                            .all())
+
+            # inline 小工具：防 None、轉型別、轉時間
+            s   = lambda v: (v or "").strip()
+            si  = lambda v, d=0: int(v) if v is not None else d
+            iso = lambda dt: dt.isoformat(timespec="seconds") if isinstance(dt, datetime) else None
             
-            for result in friend_results:
-                # 查詢關聯的使用者資料
-                relation_user = User.query.filter_by(id=result.relation_id).first()
+            # 新增：安全獲取用戶資訊的函數
+            def safe_user_info(user_obj):
+                if user_obj is None:
+                    return {"id": 0, "name": "", "account": ""}
+                return {
+                    "id": si(user_obj.id),
+                    "name": s(user_obj.name),
+                    "account": s(user_obj.account),
+                }
+
+            results_list = []
+            for r in friend_results:
+                # 修正：直接使用當前用戶，不需要重複查詢
+                from_user = user
                 
-                # 確保所有欄位都不會是 None 或 null
-                if relation_user:
-                    relation_info = {
-                        "id": result.relation_id,
-                        "name": relation_user.name if relation_user.name is not None else "",
-                        "account": relation_user.account if relation_user.account is not None else ""
-                    }
-                else:
-                    # 如果找不到關聯使用者，提供預設值
-                    relation_info = {
-                        "id": result.relation_id,
-                        "name": "",
-                        "account": ""
-                    }
+                # 關係對象（relation user）
+                rel_user = User.query.filter_by(id=r.relation_id).first()
                 
-                results_list.append({
-                    "id": result.id,
-                    "user_id": result.user_id,
-                    "relation_id": result.relation_id,
-                    "type": result.type if result.type is not None else "",
-                    "status": result.status if result.status is not None else "",
-                    "read": int(result.read) if result.read is not None else 0,
-                    "created_at": result.created_at.strftime("%Y-%m-%d %H:%M:%S") if result.created_at else "",
-                    "updated_at": result.updated_at.strftime("%Y-%m-%d %H:%M:%S") if result.updated_at else "",
-                    "relation": relation_info
-                })
+                # 確保所有必要欄位都存在且不為空
+                result_item = {
+                    "id": si(r.id),
+                    "user_id": si(r.user_id),
+                    "relation_id": si(r.relation_id),
+                    "type": si(r.type),
+                    "status": si(r.status),
+                    "read": si(r.read),
+                    "updated_at": iso(getattr(r, "updated_at", None)) or "",
+                    "created_at": iso(getattr(r, "created_at", None)) or "",
+                    
+                    # 使用安全函數獲取用戶資訊
+                    "user": safe_user_info(from_user),
+                    "relation": safe_user_info(rel_user)
+                }
                 
-            return {
-                "status": "0",
-                "message": "成功",
-                "results": results_list
-            }, 200
+                results_list.append(result_item)
+
+            return {"status": "0", "message": "成功", "results": results_list}, 200
             
         except Exception as e:
             print(f"Get friend results error: {str(e)}")
-            return {
-                "status": "1",
-                "message": "取得邀請結果失敗"
-            }, 500
-    
+            import traceback
+            traceback.print_exc()  # 添加完整錯誤堆疊
+            return {"status": "1", "message": f"伺服器錯誤: {e}"}, 500
+
+        
 
     @staticmethod
     def get_friend_requests(email: str):
