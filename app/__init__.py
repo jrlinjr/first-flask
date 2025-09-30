@@ -1,4 +1,7 @@
 import os
+import logging
+import sys
+import traceback
 from flask import Flask
 from dotenv import load_dotenv
 from app.extensions import db, bcrypt, jwt, migrate, mail
@@ -8,6 +11,17 @@ load_dotenv()
 
 def create_app(config_name="default"):
     app = Flask(__name__)
+
+
+
+    # 在 Flask 應用配置中添加
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_size': 5,
+    'pool_recycle': 300,
+    'pool_pre_ping': True,
+    'max_overflow': 0,
+    'pool_timeout': 30
+}
     
     # JWT 設定
     app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
@@ -41,6 +55,41 @@ def create_app(config_name="default"):
     from app.routes.auth_routes import auth_bp
     app.register_blueprint(auth_bp, url_prefix="/api")
 
+    # 配置詳細的錯誤日誌
+    if not app.debug:
+        logging.basicConfig(
+            level=logging.ERROR,
+            format='%(asctime)s %(levelname)s %(name)s %(message)s',
+            handlers=[
+                logging.FileHandler('error.log'),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+    
+    # 全域錯誤處理器
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        # 記錄完整的錯誤堆疊
+        app.logger.error(f"Unhandled exception: {str(e)}")
+        app.logger.error(traceback.format_exc())
+        
+        return {
+            "status": "1",
+            "message": "系統錯誤"
+        }, 500
+    
+    # 處理應用程式退出
+    import atexit
+    def cleanup():
+        app.logger.info("Application is shutting down")
+        try:
+            from app.extensions import db
+            db.session.close()
+        except:
+            pass
+    
+    atexit.register(cleanup)
+    
     return app
 
 

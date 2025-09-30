@@ -8,6 +8,10 @@ class ShareRecord(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     record_type = db.Column(db.Integer, nullable=False)  # 0:血壓 1:體重 2:血糖 3:飲食
     record_id = db.Column(db.Integer, nullable=False)    # 對應記錄的ID
+    diary = db.relationship("Diary",
+                            primaryjoin="foreign(ShareRecord.record_id)==Diary.id",
+                            lazy="joined",
+                            viewonly=True)
     relation_type = db.Column(db.Integer, nullable=False)  # 1:親友 2:糖友
     relation_id = db.Column(db.Integer, nullable=True, default=0)  # 加上預設值 0
     shared_at = db.Column(

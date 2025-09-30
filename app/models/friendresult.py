@@ -8,6 +8,9 @@ class FriendResult(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     relation_id = db.Column(db.Integer, db.ForeignKey('friends.id'), nullable=False)
     type = db.Column(db.Integer, nullable=False)  # 關係類型
+    user = db.relationship("User", foreign_keys=[user_id], lazy="joined")
+    relation = db.relationship("User", foreign_keys=[relation_id], lazy="joined")
+    invite_code = db.Column(db.String(64), nullable=True)  # 邀請碼
     status = db.Column(db.Integer, nullable=False, default=0)  # 狀態
     read = db.Column(db.Boolean, default=False)  # 是否已讀
     created_at = db.Column(

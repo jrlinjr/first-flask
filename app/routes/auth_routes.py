@@ -194,11 +194,9 @@ def add_weight():
                 "status": "1",
                 "message": "無效的使用者識別"
             }), 422
-        
+
         weight = request.json.get("weight")
-        date = request.json.get("date")  # 可選參數
-        
-        result, status = AuthController.add_weight(email, weight, date)
+        result, status = AuthController.add_weight(email, weight, recorded_at=request.json.get("recorded_at"))
         return jsonify(result), status
         
     except Exception as e:
@@ -704,9 +702,6 @@ def get_friend_invite_code():
             "status": "1",
             "message": "取得邀請碼失敗"
         }), 500
-
-
-
 
 
 @auth_bp.get("/friend/results")
