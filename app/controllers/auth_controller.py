@@ -18,7 +18,6 @@ from app.models.friend import Friend
 from app.models.diary import Diary
 from app.models.friendresult import FriendResult
 import json
-from datetime import datetime, UTC
 from time import perf_counter
 from uuid import uuid4
 from flask import current_app
@@ -34,12 +33,20 @@ import os
  
 
 
-# 在需要監控的方法中添加
-def log_memory_usage():
+
+
+TZ_TAIWAN = timezone(timedelta(hours=8))
+
+
+
+
+def log_memory_usage(label=""):
     try:
+        import psutil
+        import os
         process = psutil.Process(os.getpid())
         memory_info = process.memory_info()
-        print(f"Memory usage: {memory_info.rss / 1024 / 1024:.2f} MB")
+        print(f"{label} Memory: {memory_info.rss / 1024 / 1024:.2f} MB")
     except:
         pass
 
@@ -61,14 +68,16 @@ class AuthController:
             if not EMAIL_RE.match(email):
                 return {
                     "status": "1",
-                    "message": "email 格式不正確"
+                    "message": "Invalid email format",
+                    "message_code": "INVALID_EMAIL_FORMAT"
                 }, 400
 
             # 驗證密碼長度
             if len(password) < 8:
                 return {
                     "status": "1",
-                    "message": "密碼至少需要 8 個字元"
+                    "message": "Password must be at least 8 characters",
+                    "message_code": "PASSWORD_TOO_SHORT"
                 }, 400
 
             # 檢查 email 是否已存在
@@ -77,7 +86,8 @@ class AuthController:
                 if existing_user.is_verified:
                     return {
                         "status": "1",
-                        "message": "此 email 已被註冊且已驗證"
+                        "message": "This email is already registered and verified",
+                        "message_code": "EMAIL_REGISTERED_VERIFIED"
                     }, 409
                 else:
                     # 如果存在但未驗證，更新資料並重新發送驗證碼
@@ -89,7 +99,8 @@ class AuthController:
                         if existing_account:
                             return {
                                 "status": "1",
-                                "message": "此帳號已被使用"
+                                "message": "This account is already in use",
+                                "message_code": "ACCOUNT_ALREADY_USED"
                             }, 409
                 
                     # 更新密碼和帳號
@@ -101,7 +112,7 @@ class AuthController:
                     # 生成新的驗證碼
                     verification_code = str(random.randint(100000, 999999))
                     existing_user.verification_code = verification_code
-                    existing_user.verification_code_expires = datetime.now(timezone.utc) + timedelta(minutes=15)
+                    existing_user.verification_code_expires = datetime.now(TZ_TAIWAN) + timedelta(minutes=15)
                     
                     db.session.commit()
                     
@@ -118,7 +129,8 @@ class AuthController:
                 
                 return {
                     "status": "0",
-                    "message": "註冊成功，驗證碼已發送至您的信箱",
+                    "message": "Registration successful, verification code sent to your email",
+                    "message_code": "REGISTRATION_SUCCESS",
                     "needs_verification": True
                 }, 200
         
@@ -126,7 +138,8 @@ class AuthController:
             if account and User.query.filter_by(account=account).first():
                 return {
                     "status": "1",
-                    "message": "此帳號已被使用"
+                    "message": "This account is already in use",
+                    "message_code": "ACCOUNT_ALREADY_USED"
                 }, 409
 
             # 建立新使用者
@@ -141,16 +154,16 @@ class AuthController:
                     name=None,
                     is_verified=False,
                     verification_code=verification_code,
-                    verification_code_expires=datetime.now(timezone.utc) + timedelta(minutes=15)
+                    verification_code_expires=datetime.now(TZ_TAIWAN) + timedelta(minutes=15)
                 )
                 db.session.add(user)
                 db.session.flush()  # 先 flush 以取得 user.id
                 
                 # 為新使用者建立預設好友
                 default_friends = [
-                    {"name": "系統管理員", "relation_type": 0},
-                    {"name": "醫療諮詢", "relation_type": 1},
-                    {"name": "糖友互助", "relation_type": 2}
+                    {"name": "醫師團", "relation_type": 0},
+                    {"name": "親友團", "relation_type": 1},
+                    {"name": "控糖團", "relation_type": 2}
                 ]
                 
                 for friend_data in default_friends:
@@ -158,8 +171,8 @@ class AuthController:
                         user_id=user.id,
                         name=friend_data["name"],
                         relation_type=friend_data["relation_type"],
-                        created_at=datetime.now(timezone.utc),
-                        updated_at=datetime.now(timezone.utc)
+                        created_at=datetime.now(TZ_TAIWAN),
+                        updated_at=datetime.now(TZ_TAIWAN)
                     )
                     db.session.add(default_friend)
                 
@@ -178,7 +191,8 @@ class AuthController:
 
                 return {
                     "status": "0",
-                    "message": "註冊成功，驗證碼已發送至您的信箱",
+                    "message": "Registration successful, verification code sent to your email",
+                    "message_code": "REGISTRATION_SUCCESS",
                     "needs_verification": True
                 }, 201
         
@@ -186,7 +200,8 @@ class AuthController:
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "註冊失敗"
+                "message": "Registration failed",
+                "message_code": "REGISTRATION_FAILED"
             }, 500
 
     @staticmethod
@@ -200,13 +215,15 @@ class AuthController:
             if not email:
                 return {
                     "status": "1",
-                    "message": "email 不能為空"
+                    "message": "Email cannot be empty",
+                    "message_code": "EMAIL_REQUIRED"
                 }, 400
                 
             if not EMAIL_RE.match(email):
                 return {
                     "status": "1",
-                    "message": "email 格式不正確"
+                    "message": "Invalid email format",
+                    "message_code": "INVALID_EMAIL_FORMAT"
                 }, 400
             
             # 檢查 email 是否已經註冊
@@ -217,13 +234,14 @@ class AuthController:
                 if existing_user.is_verified:
                     return {
                         "status": "1",
-                        "message": "此 email 已被註冊且已驗證"
+                        "message": "This email is already registered and verified",
+                        "message_code": "EMAIL_REGISTERED_VERIFIED"
                     }, 409
                 else:
                     # 如果未驗證，自動發送驗證碼
                     verification_code = str(random.randint(100000, 999999))
                     existing_user.verification_code = verification_code
-                    existing_user.verification_code_expires = datetime.now(timezone.utc) + timedelta(minutes=15)
+                    existing_user.verification_code_expires = datetime.now(TZ_TAIWAN) + timedelta(minutes=15)
                     
                     db.session.commit()
                     
@@ -240,21 +258,24 @@ class AuthController:
             
                 return {
                     "status": "0",
-                    "message": "此 email 已註冊但未驗證，驗證碼已重新發送",
+                    "message": "This email is registered but not verified, verification code resent",
+                    "message_code": "EMAIL_REGISTERED_UNVERIFIED",
                     "user_exists": True,
                     "needs_verification": True
                 }, 200
     
             return {
                 "status": "0",
-                "message": "email 可以使用",
+                "message": "Email is available",
+                "message_code": "EMAIL_AVAILABLE",
                 "user_exists": False
             }, 200
             
         except Exception as e:
             return {
                 "status": "1",
-                "message": "檢查失敗"
+                "message": "Check failed",
+                "message_code": "CHECK_FAILED"
             }, 500
 
     @staticmethod
@@ -268,14 +289,16 @@ class AuthController:
             if not EMAIL_RE.match(email):
                 return {
                     "status": "1",
-                    "message": "email 格式不正確"
+                    "message": "Invalid email format",
+                    "message_code": "INVALID_EMAIL_FORMAT"
                 }, 400
             
             # 檢查密碼是否為空
             if not password:
                 return {
                     "status": "1",
-                    "message": "密碼不能為空"
+                    "message": "Password cannot be empty",
+                    "message_code": "PASSWORD_REQUIRED"
                 }, 400
 
             # 查詢使用者
@@ -285,7 +308,8 @@ class AuthController:
             if not user or not bcrypt.check_password_hash(user.password_hash, password):
                 return {
                     "status": "1",
-                    "message": "帳號或密碼錯誤"
+                    "message": "Incorrect username or password",
+                    "message_code": "INVALID_CREDENTIALS"
                 }, 401
 
             # 建立 JWT，使用 email 作為 identity
@@ -293,14 +317,16 @@ class AuthController:
             
             return {
                 "status": "0",
-                "message": "登入成功",
+                "message": "Login successful",
+                "message_code": "LOGIN_SUCCESS",
                 "token": token
             }, 200
     
         except Exception as e:
             return {
                 "status": "1",
-                "message": "登入失敗"
+                "message": "Login failed",
+                "message_code": "LOGIN_FAILED"
             }, 500
 
     @staticmethod
@@ -315,13 +341,14 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "此 email 未註冊"
+                    "message": "This email is not registered",
+                    "message_code": "EMAIL_NOT_REGISTERED"
                 }, 404
             
             # 生成新的驗證碼
             verification_code = str(random.randint(100000, 999999))
             user.verification_code = verification_code
-            user.verification_code_expires = datetime.now(timezone.utc) + timedelta(minutes=15)
+            user.verification_code_expires = datetime.now(TZ_TAIWAN) + timedelta(minutes=15)
             
             db.session.commit()
             
@@ -338,13 +365,15 @@ class AuthController:
             
             return {
                 "status": "0",
-                "message": "驗證碼已發送"
+                "message": "Verification code sent",
+                "message_code": "VERIFICATION_CODE_SENT"
             }, 200
             
         except Exception as e:
             return {
                 "status": "1",
-                "message": "發送失敗"
+                "message": "Send failed",
+                "message_code": "SEND_FAILED"
             }, 500
 
     @staticmethod
@@ -360,45 +389,62 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 檢查驗證碼
             if user.verification_code != code:
                 return {
                     "status": "1",
-                    "message": "驗證碼錯誤"
+                    "message": "Incorrect verification code",
+                    "message_code": "VERIFICATION_CODE_INCORRECT"
                 }, 400
             
-            # 檢查驗證碼是否過期
-            print(user.verification_code_expires)
-            print(type(user.verification_code_expires))
-
-            print(datetime.now() + timedelta(hours=8))
-            print(type(datetime.now()))
-            if user.verification_code_expires + timedelta(hours=8) and user.verification_code_expires + timedelta(hours=8) < datetime.now():
-                return {
-                    "status": "1",
-                    "message": "驗證碼已過期"
-                }, 400
+            # 修正時間比較邏輯
+            if user.verification_code_expires:
+                # 確保時間比較使用一致的時區
+                current_time = datetime.now(TZ_TAIWAN)
+                expires_time = user.verification_code_expires
+                
+                # 如果資料庫中的時間沒有時區資訊，加上時區
+                if expires_time.tzinfo is None:
+                    expires_time = expires_time.replace(tzinfo=TZ_TAIWAN)
+                else:
+                    # 轉換到台灣時區
+                    expires_time = expires_time.astimezone(TZ_TAIWAN)
             
+                print(f"Current time: {current_time}")
+                print(f"Expires time: {expires_time}")
+                
+                if expires_time < current_time:
+                    return {
+                        "status": "1",
+                        "message": "Verification code expired",
+                        "message_code": "VERIFICATION_CODE_EXPIRED"
+                    }, 400
+        
             # 驗證成功，標記為已驗證
             user.is_verified = True
             user.verification_code = None
             user.verification_code_expires = None
-            
+        
             db.session.commit()
-            
+        
             return {
                 "status": "0",
-                "message": "驗證成功"
+                "message": "Verification successful",
+                "message_code": "VERIFICATION_SUCCESS"
             }, 200
-            
+        
         except Exception as e:
+            print(f"verify_code error: {str(e)}")
             print(traceback.format_exc())
+            db.session.rollback()
             return {
                 "status": "1",
-                "message": "驗證失敗"
+                "message": "Verification failed",
+                "message_code": "VERIFICATION_FAILED"
             }, 500
 
     @staticmethod
@@ -412,7 +458,8 @@ class AuthController:
             if not EMAIL_RE.match(email):
                 return {
                     "status": "1",
-                    "message": "email 格式不正確"
+                    "message": "Invalid email format",
+                    "message_code": "INVALID_EMAIL_FORMAT"
                 }, 400
             
             # 查詢使用者
@@ -420,7 +467,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "此 email 未註冊"
+                    "message": "This email is not registered",
+                    "message_code": "EMAIL_NOT_REGISTERED"
                 }, 404
             
             # 生成隨機密碼 (8位數，包含大小寫字母和數字)
@@ -450,7 +498,8 @@ class AuthController:
             
             return {
                 "status": "0",
-                "message": "新密碼已發送至您的 email",
+                "message": "New password sent to your email",
+                "message_code": "NEW_PASSWORD_SENT",
                 "temp_password": new_password  # 僅供測試，正式環境應移除
             }, 200
             
@@ -458,7 +507,8 @@ class AuthController:
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "重設失敗"
+                "message": "Reset failed",
+                "message_code": "RESET_FAILED"
             }, 500
 
     @staticmethod
@@ -476,7 +526,8 @@ class AuthController:
             if len(new_password) < 8:
                 return {
                     "status": "1", 
-                    "message": "密碼至少需要 8 個字元"
+                    "message": "Password must be at least 8 characters",
+                    "message_code": "PASSWORD_TOO_SHORT"
                 }, 400
             
             # 查詢使用者
@@ -484,7 +535,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 更新密碼
@@ -495,191 +547,654 @@ class AuthController:
             
             return {
                 "status": "0",
-                "message": "密碼重設成功"
+                "message": "Password reset successful",
+                "message_code": "PASSWORD_RESET_SUCCESS"
             }, 200
             
         except Exception as e:
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "重設失敗"
+                "message": "Reset failed",
+                "message_code": "RESET_FAILED"
             }, 500
+
+
+    # @staticmethod
+    # def get_user(email: str):
+    #     print("Getting user info...")
+    #     log_memory_usage("Start get_user")
+
+    #     from flask import has_app_context
+    #     if not has_app_context():
+    #         try:
+    #             from app import create_app
+    #             app = create_app()
+    #             with app.app_context():
+    #                 return AuthController.get_user(email)
+    #         except Exception as context_error:
+    #             print(f"Failed to create app context: {context_error}")
+    #             return {
+    #                 "status": "1", 
+    #                 "message": "System error: Unable to create application context",
+    #                 "message_code": "SYSTEM_ERROR"
+    #             }, 500
+
+    #     # ---- helpers (僅此函式內部使用) -----------------------------------------
+    #     def ss(v, default=""):
+    #         """safe string，None → ''；其餘轉字串"""
+    #         try:
+    #             if v is None:
+    #                 return default
+    #             return str(v)
+    #         except Exception:
+    #             return default
+
+    #     def si0(v, default=0):
+    #         """safe int（失敗給 0）"""
+    #         try:
+    #             if v is None or v == "":
+    #                 return default
+    #             return int(v)
+    #         except Exception:
+    #             return default
+
+    #     def sf0(v, default=0.0):
+    #         """safe float（失敗給 0.0）"""
+    #         try:
+    #             if v is None or v == "":
+    #                 return default
+    #             return float(v)
+    #         except Exception:
+    #             return default
+
+    #     def f_or_none(v):
+    #         """可為 None 的 float（DB 欄位允許 null 時使用）"""
+    #         try:
+    #             if v is None or v == "":
+    #                 return None
+    #             return float(v)
+    #         except Exception:
+    #             return None
+
+    #     def i_or_none(v):
+    #         """可為 None 的 int（DB 欄位允許 null 時使用）"""
+    #         try:
+    #             if v is None or v == "":
+    #                 return None
+    #             return int(v)
+    #         except Exception:
+    #             return None
+
+    #     def safe_dt(dt, fmt="%Y-%m-%d %H:%M:%S"):
+    #         """時間一律回字串；None → ''；字串若已是日期，也盡量規整"""
+    #         from datetime import datetime
+    #         try:
+    #             if not dt:
+    #                 return ""
+    #             if isinstance(dt, str):
+    #                 for f in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d", "%Y/%m/%d %H:%M:%S"):
+    #                     try:
+    #                         return datetime.strptime(dt, f).strftime(fmt)
+    #                     except ValueError:
+    #                         pass
+    #                 return dt
+    #             if isinstance(dt, datetime):
+    #                 return dt.strftime(fmt)
+    #             if hasattr(dt, "strftime"):
+    #                 return dt.strftime(fmt)
+    #             return ""
+    #         except Exception:
+    #             return ""
+
+    #     # -----------------------------------------------------------------------
+
+    #     try:
+    #         from app.extensions import db
+    #         from app.models.user import User, UserDefault, UserSetting, UserVip, A1cRecord
+    #         from sqlalchemy.exc import SQLAlchemyError
+    #         import traceback
+
+    #         # 1) 查使用者
+    #         print(f"Querying user with email: {email}")
+    #         user = User.query.filter_by(email=email).first()
+    #         if not user:
+    #             print(f"User not found for email: {email}")
+    #             return {
+    #                 "status": "1", 
+    #                 "message": "User not found",
+    #                 "message_code": "USER_NOT_FOUND"
+    #             }, 404
+
+    #         print(f"Found user ID: {user.id}, email: {user.email}")
+
+    #         # 2) 相關表容錯查詢
+    #         user_default = None
+    #         user_setting = None
+    #         user_vip = None
+    #         user_a1c = None
+
+    #         try:
+    #             print(f"Querying user_default for user_id: {user.id}")
+    #             user_default = UserDefault.query.filter_by(user_id=user.id).first()
+    #             print(f"user_default result: {'Found' if user_default else 'None'}")
+    #         except Exception as e:
+    #             print(f"Error querying user_default: {e}")
+
+    #         try:
+    #             print(f"Querying user_setting for user_id: {user.id}")
+    #             user_setting = UserSetting.query.filter_by(user_id=user.id).first()
+    #             print(f"user_setting result: {'Found' if user_setting else 'None'}")
+    #         except Exception as e:
+    #             print(f"Error querying user_setting: {e}")
+
+    #         try:
+    #             print(f"Querying user_vip for user_id: {user.id}")
+    #             user_vip = UserVip.query.filter_by(user_id=user.id).first()
+    #             print(f"user_vip result: {'Found' if user_vip else 'None'}")
+    #         except Exception as e:
+    #             print(f"Error querying user_vip: {e}")
+
+    #         try:
+    #             print(f"Querying A1cRecord for user_id: {user.id}")
+    #             user_a1c = (
+    #                 A1cRecord.query.filter_by(user_id=user.id)
+    #                 .order_by(A1cRecord.created_at.desc())
+    #                 .first()
+    #             )
+    #             print(f"user_a1c result: {'Found' if user_a1c else 'None'}")
+    #         except Exception as e:
+    #             print(f"Error querying user_a1c: {e}")
+
+    #         # 3) 性別（bool/int → 0/1）
+    #         try:
+    #             print(f"Processing gender for user {user.id}")
+    #             gender_value = 1 if getattr(user, "gender", False) else 0
+    #             print(f"Gender value: {gender_value}")
+    #         except Exception as e:
+    #             print(f"Error processing gender: {e}")
+    #             gender_value = 0
+
+    #         # 4) 邀請碼（優先用 DB 值，否則組一個固定可重現的碼）
+    #         invite_code = ""
+    #         try:
+    #             print(f"Processing invite_code for user {user.id}")
+    #             if getattr(user, "invite_code", None):
+    #                 invite_code = ss(user.invite_code)
+    #                 print(f"Using existing invite_code: {invite_code}")
+    #             else:
+    #                 user_id_str = f"{int(user.id):04d}"
+    #                 suffix = (int(user.id) * 7 + 1000) % 9000 + 1000
+    #                 invite_code = user_id_str + f"{suffix:04d}"
+    #                 print(f"Generated invite_code: {invite_code}")
+    #         except Exception as e:
+    #             print(f"Error generating invite code: {e}")
+    #             invite_code = f"{int(user.id):08d}"
+
+    #         # 5) 未讀統計（規格示例三格整數）
+    #         unread_records_array = [0, 0, 0]
+
+    #         log_memory_usage("After queries in get_user")
+
+    #         # 6) 會員狀態字串（規格：user.status 要字串）
+    #         try:
+    #             print(f"Processing VIP status for user {user.id}")
+    #             vip_level = si0(getattr(user_vip, "level", 0)) if user_vip else 0
+    #             user_status_str = "VIP" if vip_level > 0 else "general"
+    #             print(f"VIP level: {vip_level}, status: {user_status_str}")
+    #         except Exception as e:
+    #             print(f"Error processing VIP status: {e}")
+    #             user_status_str = "general"
+
+    #         # 7) 組回傳
+    #         try:
+    #             print(f"Building response data for user {user.id}")
+    #             response_data = {
+    #                 "status": "0",
+    #                 "message": "success",
+    #                 "message_code": "SUCCESS",
+    #                 "user": {
+    #                     "id": si0(getattr(user, "id", 0)),
+    #                     "name": ss(getattr(user, "name", "")),
+    #                     "account": ss(getattr(user, "account", "")),
+    #                     "email": ss(getattr(user, "email", "")),
+    #                     "phone": ss(getattr(user, "phone", "")),
+    #                     "fb_id": ss(getattr(user, "fb_id", "")),
+    #                     "status": user_status_str,
+    #                     "group": ss(getattr(user, "group", "0")),
+    #                     "birthday": safe_dt(getattr(user, "birthday", None), "%Y-%m-%d"),
+    #                     "height": sf0(getattr(user, "height", 0.0)),
+    #                     "weight": sf0(getattr(user, "weight", 0.0)),
+    #                     "gender": si0(gender_value),
+    #                     "address": ss(getattr(user, "address", "")),
+    #                     "unread_records": unread_records_array,
+    #                     "verified": 1 if getattr(user, "is_verified", False) else 0,
+    #                     "privacy_policy": 1,
+    #                     "must_change_password": si0(getattr(user, "must_change_password", 0)),
+    #                     "fcm_id": ss(getattr(user, "fcm_id", "")),
+    #                     "login_times": 0,
+    #                     "created_at": safe_dt(getattr(user, "created_at", None)),
+    #                     "updated_at": safe_dt(getattr(user, "created_at", None)),
+    #                     "invite_code": invite_code,
+    #                     "verification_code": ss(getattr(user, "verification_code", "")),
+                        
+    #                     # 判斷子物件是否存在，不存在則為 None
+    #                     "default": {
+    #                         "id": si0(getattr(user_default, "id", 0)),
+    #                         "user_id": si0(getattr(user, "id", 0)),
+    #                         "sugar_delta_max": sf0(getattr(user_default, "sugar_delta_max", 0.0)),
+    #                         "sugar_delta_min": sf0(getattr(user_default, "sugar_delta_min", 0.0)),
+    #                         "sugar_morning_max": sf0(getattr(user_default, "sugar_morning_max", 0.0)),
+    #                         "sugar_morning_min": sf0(getattr(user_default, "sugar_morning_min", 0.0)),
+    #                         "sugar_evening_max": sf0(getattr(user_default, "sugar_evening_max", 0.0)),
+    #                         "sugar_evening_min": sf0(getattr(user_default, "sugar_evening_min", 0.0)),
+    #                         "sugar_before_max": sf0(getattr(user_default, "sugar_before_max", 0.0)),
+    #                         "sugar_before_min": sf0(getattr(user_default, "sugar_before_min", 0.0)),
+    #                         "sugar_after_max": sf0(getattr(user_default, "sugar_after_max", 0.0)),
+    #                         "sugar_after_min": sf0(getattr(user_default, "sugar_after_min", 0.0)),
+    #                         "systolic_max": si0(getattr(user_default, "systolic_max", 0)),
+    #                         "systolic_min": si0(getattr(user_default, "systolic_min", 0)),
+    #                         "diastolic_max": si0(getattr(user_default, "diastolic_max", 0)),
+    #                         "diastolic_min": si0(getattr(user_default, "diastolic_min", 0)),
+    #                         "pulse_max": si0(getattr(user_default, "pulse_max", 0)),
+    #                         "pulse_min": si0(getattr(user_default, "pulse_min", 0)),
+    #                         "weight_max": sf0(getattr(user_default, "weight_max", 0.0)),
+    #                         "weight_min": sf0(getattr(user_default, "weight_min", 0.0)),
+    #                         "bmi_max": sf0(getattr(user_default, "bmi_max", 0.0)),
+    #                         "bmi_min": sf0(getattr(user_default, "bmi_min", 0.0)),
+    #                         "body_fat_max": sf0(getattr(user_default, "body_fat_max", 0.0)),
+    #                         "body_fat_min": sf0(getattr(user_default, "body_fat_min", 0.0)),
+    #                         "created_at": safe_dt(getattr(user_default, "created_at", None)),
+    #                         "updated_at": safe_dt(getattr(user_default, "updated_at", None)),
+    #                     } if user_default else None,  # <--- 重要修改點
+                        
+    #                     "setting": {
+    #                         "id": si0(getattr(user_setting, "id", 0)),
+    #                         "user_id": si0(getattr(user, "id", 0)),
+    #                         "after_recording": si0(getattr(user_setting, "after_recording", 0)),
+    #                         "no_recording_for_a_day": si0(getattr(user_setting, "no_recording_for_a_day", 0)),
+    #                         "over_max_or_under_min": si0(getattr(user_setting, "over_max_or_under_min", 0)),
+    #                         "after_meal": si0(getattr(user_setting, "after_meal", 0)),
+    #                         "unit_of_sugar": si0(getattr(user_setting, "unit_of_sugar", 0)),
+    #                         "unit_of_weight": si0(getattr(user_setting, "unit_of_weight", 0)),
+    #                         "unit_of_height": si0(getattr(user_setting, "unit_of_height", 0)),
+    #                         "created_at": safe_dt(getattr(user_setting, "created_at", None)),
+    #                         "updated_at": safe_dt(getattr(user_setting, "updated_at", None)),
+    #                     } if user_setting else None,  # <--- 重要修改點
+                        
+    #                     "vip": {
+    #                         "id": si0(getattr(user_vip, "id", 0)),
+    #                         "user_id": si0(getattr(user, "id", 0)),
+    #                         "level": vip_level,
+    #                         "remark": sf0(getattr(user_vip, "remark", 0.0)),
+    #                         "started_at": safe_dt(getattr(user_vip, "started_at", None)),
+    #                         "ended_at": safe_dt(getattr(user_vip, "ended_at", None)),
+    #                         "created_at": safe_dt(getattr(user_vip, "created_at", None)),
+    #                         "updated_at": safe_dt(getattr(user_vip, "updated_at", None)),
+    #                     } if user_vip else None,  # <--- 重要修改點
+                        
+    #                     "a1c": {
+    #                         "message": ss(getattr(user_a1c, "message", "")),
+    #                         "latest_value": sf0(getattr(user_a1c, "A1c", 0.0)),
+    #                         "latest_date": safe_dt(getattr(user_a1c, "record_date", None)),
+    #                     } if user_a1c else None,  # <--- 重要修改點
+    #                 },
+    #             }
+    #             print(f"Response data built successfully for user {user.id}")
+    #         except Exception as e:
+    #             print(f"Error building response data: {e}")
+    #             import traceback
+    #             print(traceback.format_exc())
+    #             raise
+
+    #         log_memory_usage("End get_user")
+    #         return response_data, 200
+
+    #     except Exception as e:
+    #         print(f"Critical error in get_user: {str(e)}")
+    #         import traceback as _tb
+    #         print(_tb.format_exc())
+    #         log_memory_usage("Error in get_user")
+    #         return {"status": "1", "message": "Failed to get user information",
+    #         "message_code": "GET_USER_FAILED"}, 500
+    #     finally:
+    #         try:
+    #             from app.extensions import db
+    #             db.session.remove()
+    #         except Exception as db_error:
+    #             print(f"Error closing database session: {db_error}")
+            
+    #         try:
+    #             import gc
+    #             collected = gc.collect()
+    #             print(f"GC collected {collected} objects in get_user cleanup")
+    #             log_memory_usage("After get_user cleanup")
+    #         except Exception as cleanup_error:
+    #             print(f"Cleanup error in get_user: {cleanup_error}")
 
     @staticmethod
     def get_user(email: str):
         print("Getting user info...")
+        log_memory_usage("Start get_user")
+
+        # 確保在 Flask Application Context 中執行
+        from flask import has_app_context
+        if not has_app_context():
+            try:
+                from app import create_app
+                app = create_app()
+                with app.app_context():
+                    return AuthController.get_user(email)
+            except Exception as context_error:
+                print(f"Failed to create app context: {context_error}")
+                return {
+                    "status": "1", 
+                    "message": "System error: Unable to create application context",
+                    "message_code": "SYSTEM_ERROR"
+                }, 500
+
+        # ---- helpers (僅此函式內部使用) -----------------------------------------
+        def ss(v, default=""):
+            """safe string，None → ''；其餘轉字串"""
+            try:
+                if v is None:
+                    return default
+                return str(v)
+            except Exception:
+                return default
+
+        def si0(v, default=0):
+            """safe int（失敗給 0）"""
+            try:
+                if v is None or v == "":
+                    return default
+                return int(v)
+            except Exception:
+                return default
+
+        def sf0(v, default=0.0):
+            """safe float（失敗給 0.0）"""
+            try:
+                if v is None or v == "":
+                    return default
+                return float(v)
+            except Exception:
+                return default
+
+        def f_or_none(v):
+            """可為 None 的 float（DB 欄位允許 null 時使用）"""
+            try:
+                if v is None or v == "":
+                    return None
+                return float(v)
+            except Exception:
+                return None
+
+        def i_or_none(v):
+            """可為 None 的 int（DB 欄位允許 null 時使用）"""
+            try:
+                if v is None or v == "":
+                    return None
+                return int(v)
+            except Exception:
+                return None
+
+        def safe_dt(dt, fmt="%Y-%m-%d %H:%M:%S"):
+            """時間一律回字串；None → ''；字串若已是日期，也盡量規整"""
+            try:
+                if not dt:
+                    return ""
+                if isinstance(dt, str):
+                    # 嘗試常見格式
+                    for f in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d", "%Y/%m/%d %H:%M:%S"):
+                        try:
+                            return datetime.strptime(dt, f).strftime(fmt)
+                        except ValueError:
+                            pass
+                    return dt  # 無法解析就原字串回傳
+                if isinstance(dt, datetime):
+                    return dt.strftime(fmt)
+                if hasattr(dt, "strftime"):
+                    return dt.strftime(fmt)
+                return ""
+            except Exception:
+                return ""
+
+        # -----------------------------------------------------------------------
+
         try:
-            # 查詢使用者
+            # 1) 查使用者
+            print(f"Querying user with email: {email}")
             user = User.query.filter_by(email=email).first()
             if not user:
+                print(f"User not found for email: {email}")
                 return {
-                    "status": "1",
-                    "message": "使用者不存在"
+                    "status": "1", 
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
-            # 安全地查詢相關健康資料
+            print(f"Found user ID: {user.id}, email: {user.email}")
+
+            # 2) 相關表容錯查詢
             user_default = None
             user_setting = None
             user_vip = None
-            user_a1c = None  # 新增：查詢使用者的 A1c 記錄
-            
+            user_a1c = None
+
             try:
+                print(f"Querying user_default for user_id: {user.id}")
                 user_default = UserDefault.query.filter_by(user_id=user.id).first()
+                print(f"user_default result: {'Found' if user_default else 'None'}")
             except Exception as e:
-                user_default = None
+                print(f"Error querying user_default: {e}")
 
             try:
+                print(f"Querying user_setting for user_id: {user.id}")
                 user_setting = UserSetting.query.filter_by(user_id=user.id).first()
+                print(f"user_setting result: {'Found' if user_setting else 'None'}")
             except Exception as e:
-                user_setting = None
+                print(f"Error querying user_setting: {e}")
 
             try:
+                print(f"Querying user_vip for user_id: {user.id}")
                 user_vip = UserVip.query.filter_by(user_id=user.id).first()
+                print(f"user_vip result: {'Found' if user_vip else 'None'}")
             except Exception as e:
-                user_vip = None
+                print(f"Error querying user_vip: {e}")
 
-            # 新增：查詢使用者最新的 A1c 記錄
             try:
-                user_a1c = A1cRecord.query.filter_by(user_id=user.id).order_by(A1cRecord.created_at.desc()).first()
+                print(f"Querying A1cRecord for user_id: {user.id}")
+                user_a1c = (
+                    A1cRecord.query.filter_by(user_id=user.id)
+                    .order_by(A1cRecord.created_at.desc())
+                    .first()
+                )
+                print(f"user_a1c result: {'Found' if user_a1c else 'None'}")
             except Exception as e:
-                user_a1c = None
+                print(f"Error querying user_a1c: {e}")
 
-            # 安全處理 gender 轉換
+            # 3) 性別（bool/int → 0/1）
             try:
-                gender_value = 0
-                if hasattr(user, 'gender') and user.gender is not None:
-                    gender_value = 1 if user.gender else 0
+                print(f"Processing gender for user {user.id}")
+                gender_value = 1 if getattr(user, "gender", False) else 0
+                print(f"Gender value: {gender_value}")
             except Exception as e:
+                print(f"Error processing gender: {e}")
                 gender_value = 0
 
-            # 安全的字串格式化函數
-            def safe_strftime(dt, format_str="%Y-%m-%d %H:%M:%S", default=""):
-                if not dt:
-                    return default
-                try:
-                    return dt.strftime(format_str)
-                except Exception as e:
-                    return default
+            # 4) 邀請碼（優先用 DB 值，否則組一個固定可重現的碼）
+            invite_code = ""
+            try:
+                print(f"Processing invite_code for user {user.id}")
+                if getattr(user, "invite_code", None):
+                    invite_code = ss(user.invite_code)
+                    print(f"Using existing invite_code: {invite_code}")
+                else:
+                    user_id_str = f"{int(user.id):04d}"
+                    suffix = (int(user.id) * 7 + 1000) % 9000 + 1000
+                    invite_code = user_id_str + f"{suffix:04d}"
+                    print(f"Generated invite_code: {invite_code}")
+            except Exception as e:
+                print(f"Error generating invite code: {e}")
+                invite_code = f"{int(user.id):08d}"
 
-            # 安全的屬性取得函數
-            def safe_getattr(obj, attr, default=None):
-                if not obj:
-                    return default
-                try:
-                    value = getattr(obj, attr, default)
-                    return value if value is not None else default
-                except Exception as e:
-                    return default
+            # 5) 未讀統計（規格示例三格整數）
+            unread_records_array = [0, 0, 0]
 
-            # 安全的浮點數轉換
-            def safe_float(value, default=0.0):
-                if value is None:
-                    return default
-                try:
-                    return float(value)
-                except (ValueError, TypeError) as e:
-                    return default
+            log_memory_usage("After queries in get_user")
 
-            # 建構回應資料
-            response_data = {
-                "status": "0",
-                "message": "成功",
-                "user": {
+            # 6) 會員狀態字串（規格：user.status 要字串）
+            try:
+                print(f"Processing VIP status for user {user.id}")
+                vip_level = si0(getattr(user_vip, "level", 0)) if user_vip else 0
+                user_status_str = "VIP" if vip_level > 0 else "general"
+                print(f"VIP level: {vip_level}, status: {user_status_str}")
+            except Exception as e:
+                print(f"Error processing VIP status: {e}")
+                user_status_str = "general"
+
+            # 7) 組回傳
+            try:
+                print(f"Building response data for user {user.id}")
+                response_data = {
                     "status": "0",
-                    "id": int(user.id),
-                    "name": safe_getattr(user, 'name', ''),
-                    "account": safe_getattr(user, 'account', ''),
-                    "email": user.email,
-                    "phone": safe_getattr(user, 'phone', ''),
-                    "fb_id": safe_getattr(user, 'fb_id', '未設置'),
-                    "status": safe_getattr(user, 'status', 'Normal'),
-                    "group": safe_getattr(user, 'group', '0'),
-                    "birthday": safe_getattr(user, 'birthday', ''),
-                    "height": safe_float(safe_getattr(user, 'height')),
-                    "weight": safe_float(safe_getattr(user, 'weight')),
-                    "gender": gender_value,
-                    "address": safe_getattr(user, 'address', ''),
-                    "unread_records": [0, 0, 0],
-                    "verified": 1 if safe_getattr(user, 'is_verified', False) else 0,
-                    "privacy_policy": 1,
-                    "must_change_password": safe_getattr(user, 'must_change_password', 0),
-                    "fcm_id": safe_getattr(user, 'fcm_id', ''),
-                    "login_times": 0,
-                    "created_at": safe_strftime(safe_getattr(user, 'created_at')),
-                    "updated_at": safe_strftime(safe_getattr(user, 'created_at')),
-                    
-                    # 健康預設值
-                    "default": {
-                        "id": safe_getattr(user_default, 'id', 1),
-                        "user_id": user.id,
-                        "sugar_delta_max": safe_float(safe_getattr(user_default, 'sugar_delta_max')),
-                        "sugar_delta_min": safe_float(safe_getattr(user_default, 'sugar_delta_min')),
-                        "sugar_morning_max": safe_float(safe_getattr(user_default, 'sugar_morning_max')),
-                        "sugar_morning_min": safe_float(safe_getattr(user_default, 'sugar_morning_min')),
-                        "sugar_evening_max": safe_float(safe_getattr(user_default, 'sugar_evening_max')),
-                        "sugar_evening_min": safe_float(safe_getattr(user_default, 'sugar_evening_min')),
-                        "sugar_before_max": safe_float(safe_getattr(user_default, 'sugar_before_max')),
-                        "sugar_before_min": safe_float(safe_getattr(user_default, 'sugar_before_min')),
-                        "sugar_after_max": safe_float(safe_getattr(user_default, 'sugar_after_max')),
-                        "sugar_after_min": safe_float(safe_getattr(user_default, 'sugar_after_min')),
-                        "systolic_max": safe_getattr(user_default, 'systolic_max', 0),
-                        "systolic_min": safe_getattr(user_default, 'systolic_min', 0),
-                        "diastolic_max": safe_getattr(user_default, 'diastolic_max', 0),
-                        "diastolic_min": safe_getattr(user_default, 'diastolic_min', 0),
-                        "pulse_max": safe_getattr(user_default, 'pulse_max', 0),
-                        "pulse_min": safe_getattr(user_default, 'pulse_min', 0),
-                        "weight_max": safe_float(safe_getattr(user_default, 'weight_max')),
-                        "weight_min": safe_float(safe_getattr(user_default, 'weight_min')),
-                        "bmi_max": safe_float(safe_getattr(user_default, 'bmi_max')),
-                        "bmi_min": safe_float(safe_getattr(user_default, 'bmi_min')),
-                        "body_fat_max": safe_float(safe_getattr(user_default, 'body_fat_max')),
-                        "body_fat_min": safe_float(safe_getattr(user_default, 'body_fat_min')),
-                        "created_at": safe_strftime(safe_getattr(user_default, 'created_at'), default="2023-08-23 16:51:14"),
-                        "updated_at": safe_strftime(safe_getattr(user_default, 'updated_at'), default="2023-08-23 16:51:14")
-                    },
-                    
-                    # 使用者設定
-                    "setting": {
-                        "id": safe_getattr(user_setting, 'id', 1),
-                        "user_id": user.id,
-                        "after_recording": safe_getattr(user_setting, 'after_recording', 0),
-                        "no_recording_for_a_day": safe_getattr(user_setting, 'no_recording_for_a_day', 0),
-                        "over_max_or_under_min": safe_getattr(user_setting, 'over_max_or_under_min', 0),
-                        "after_meal": safe_getattr(user_setting, 'after_meal', 0),
-                        "unit_of_sugar": safe_getattr(user_setting, 'unit_of_sugar', 0),
-                        "unit_of_weight": safe_getattr(user_setting, 'unit_of_weight', 0),
-                        "unit_of_height": safe_getattr(user_setting, 'unit_of_height', 0),
-                        "created_at": safe_strftime(safe_getattr(user_setting, 'created_at'), default="2023-02-03 08:17:17"),
-                        "updated_at": safe_strftime(safe_getattr(user_setting, 'updated_at'), default="2023-02-03 08:17:17")
-                    },
-                    
-                    # VIP 資訊
-                    "vip": {
-                        "id": safe_getattr(user_vip, 'id', 1),
-                        "user_id": user.id,
-                        "level": safe_getattr(user_vip, 'level', 0),
-                        "remark": safe_float(safe_getattr(user_vip, 'remark')),
-                        "started_at": safe_getattr(user_vip, 'started_at', "2023-02-03 08:17:17"),
-                        "ended_at": safe_getattr(user_vip, 'ended_at', "2023-02-03 08:17:17"),
-                        "created_at": safe_strftime(safe_getattr(user_vip, 'created_at'), default="2023-02-03 08:17:17"),
-                        "updated_at": safe_strftime(safe_getattr(user_vip, 'updated_at'), default="2023-02-03 08:17:17")
-                    },
-                    "a1c": {
-                        "message": safe_getattr(user_a1c, 'message', "") if user_a1c else "",
-                        "latest_value": safe_getattr(user_a1c, 'A1c', 0.0) if user_a1c else 0.0,
-                        "latest_date": safe_strftime(safe_getattr(user_a1c, 'record_date')) if user_a1c else ""
-                    }
-                }
-            }
+                    "message": "success",
+                    "message_code": "SUCCESS",
+                    "user": {
+                        "id": si0(getattr(user, "id", 0)),
+                        "name": ss(getattr(user, "name", "")),
+                        "account": ss(getattr(user, "account", "")),
+                        "email": ss(getattr(user, "email", "")),
+                        "phone": ss(getattr(user, "phone", "")),
+                        "fb_id": ss(getattr(user, "fb_id", "")),
+                        "status": user_status_str,                          # <- 規格：字串
+                        "group": ss(getattr(user, "group", "0")),           # 一律字串
+                        "birthday": safe_dt(getattr(user, "birthday", None), "%Y-%m-%d"),
+                        "height": sf0(getattr(user, "height", 0.0)),        # 規格：double
+                        "weight": sf0(getattr(user, "weight", 0.0)),  # ← 一律 Double，無值給 0.0
+                        "gender": si0(gender_value),
+                        "address": ss(getattr(user, "address", "")),
+                        "unread_records": unread_records_array,
+                        "verified": 1 if getattr(user, "is_verified", False) else 0,
+                        "privacy_policy": 1,
+                        "must_change_password": si0(getattr(user, "must_change_password", 0)),
+                        "fcm_id": ss(getattr(user, "fcm_id", "")),
+                        "login_times": 0,  # 固定值，因為資料庫中沒有此欄位
+                        "created_at": safe_dt(getattr(user, "created_at", None)),
+                        "updated_at": safe_dt(getattr(user, "created_at", None)),  # 使用 created_at 作為 updated_at
+                        "invite_code": invite_code,
+                        # 你原本有帶 verification_code，保留相容性（前端若沒用可移除）
+                        "verification_code": ss(getattr(user, "verification_code", "")),
 
+                    "default": {
+                        "id": si0(getattr(user_default, "id", None)) if user_default else 0,
+                        "user_id": si0(getattr(user, "id", None)),
+                        # ---- Float 欄位 ----
+                        "sugar_delta_max": sf0(getattr(user_default, "sugar_delta_max", None)) if user_default else 0.0,
+                        "sugar_delta_min": sf0(getattr(user_default, "sugar_delta_min", None)) if user_default else 0.0,
+                        "sugar_morning_max": sf0(getattr(user_default, "sugar_morning_max", None)) if user_default else 0.0,
+                        "sugar_morning_min": sf0(getattr(user_default, "sugar_morning_min", None)) if user_default else 0.0,
+                        "sugar_evening_max": sf0(getattr(user_default, "sugar_evening_max", None)) if user_default else 0.0,
+                        "sugar_evening_min": sf0(getattr(user_default, "sugar_evening_min", None)) if user_default else 0.0,
+                        "sugar_before_max": sf0(getattr(user_default, "sugar_before_max", None)) if user_default else 0.0,
+                        "sugar_before_min": sf0(getattr(user_default, "sugar_before_min", None)) if user_default else 0.0,
+                        "sugar_after_max": sf0(getattr(user_default, "sugar_after_max", None)) if user_default else 0.0,
+                        "sugar_after_min": sf0(getattr(user_default, "sugar_after_min", None)) if user_default else 0.0,
+                        # ---- Int 欄位 ----
+                        "systolic_max": si0(getattr(user_default, "systolic_max", None)) if user_default else 0,
+                        "systolic_min": si0(getattr(user_default, "systolic_min", None)) if user_default else 0,
+                        "diastolic_max": si0(getattr(user_default, "diastolic_max", None)) if user_default else 0,
+                        "diastolic_min": si0(getattr(user_default, "diastolic_min", None)) if user_default else 0,
+                        "pulse_max": si0(getattr(user_default, "pulse_max", None)) if user_default else 0,
+                        "pulse_min": si0(getattr(user_default, "pulse_min", None)) if user_default else 0,
+                        # ---- Float 欄位 ----
+                        "weight_max": sf0(getattr(user_default, "weight_max", None)) if user_default else 0.0,
+                        "weight_min": sf0(getattr(user_default, "weight_min", None)) if user_default else 0.0,
+                        "bmi_max": sf0(getattr(user_default, "bmi_max", None)) if user_default else 0.0,
+                        "bmi_min": sf0(getattr(user_default, "bmi_min", None)) if user_default else 0.0,
+                        "body_fat_max": sf0(getattr(user_default, "body_fat_max", None)) if user_default else 0.0,
+                        "body_fat_min": sf0(getattr(user_default, "body_fat_min", None)) if user_default else 0.0,
+                        # ---- 時間字串 ----
+                        "created_at": safe_dt(getattr(user_default, "created_at", None)) if user_default else "",
+                        "updated_at": safe_dt(getattr(user_default, "updated_at", None)) if user_default else "",
+                    },
+
+                    "setting": {
+                        "id": si0(getattr(user_setting, "id", None)) if user_setting else 0,
+                        "user_id": si0(getattr(user, "id", None)),
+                        "after_recording": si0(getattr(user_setting, "after_recording", None)) if user_setting else 0,
+                        "no_recording_for_a_day": si0(getattr(user_setting, "no_recording_for_a_day", None)) if user_setting else 0,
+                        "over_max_or_under_min": si0(getattr(user_setting, "over_max_or_under_min", None)) if user_setting else 0,
+                        "after_meal": si0(getattr(user_setting, "after_meal", None)) if user_setting else 0,
+                        "unit_of_sugar": si0(getattr(user_setting, "unit_of_sugar", None)) if user_setting else 0,
+                        "unit_of_weight": si0(getattr(user_setting, "unit_of_weight", None)) if user_setting else 0,
+                        "unit_of_height": si0(getattr(user_setting, "unit_of_height", None)) if user_setting else 0,
+                        "created_at": safe_dt(getattr(user_setting, "created_at", None)) if user_setting else "",
+                        "updated_at": safe_dt(getattr(user_setting, "updated_at", None)) if user_setting else "",
+                    },
+
+                    "vip": {
+                        "id": si0(getattr(user_vip, "id", None)) if user_vip else 0,
+                        "user_id": si0(getattr(user, "id", None)),
+                        "level": vip_level,
+                        "remark": sf0(getattr(user_vip, "remark", None)) if user_vip else 0.0,
+                        "started_at": safe_dt(getattr(user_vip, "started_at", None)) if user_vip else "",
+                        "ended_at": safe_dt(getattr(user_vip, "ended_at", None)) if user_vip else "",
+                        "created_at": safe_dt(getattr(user_vip, "created_at", None)) if user_vip else "",
+                        "updated_at": safe_dt(getattr(user_vip, "updated_at", None)) if user_vip else "",
+                    },
+
+                    "a1c": {
+                        "message": ss(getattr(user_a1c, "message", None)) if user_a1c else "",
+                        "latest_value": sf0(getattr(user_a1c, "A1c", None)) if user_a1c else 0.0,  # ← 改用 sf0
+                        "latest_date": safe_dt(getattr(user_a1c, "record_date", None)) if user_a1c else "",
+                    },
+                    },
+                }
+                print(f"Response data built successfully for user {user.id}")
+            except Exception as e:
+                print(f"Error building response data: {e}")
+                import traceback
+                print(traceback.format_exc())
+                raise  # 重新拋出異常
+
+            log_memory_usage("End get_user")
             return response_data, 200
 
         except Exception as e:
-            print(traceback.format_exc())
-            return {
-                "status": "1",
-                "message": "取得使用者資訊失敗"
-            }, 500
+            print(f"Critical error in get_user: {str(e)}")
+            import traceback as _tb
+            print(_tb.format_exc())
+            log_memory_usage("Error in get_user")
+            return {"status": "1", "message": "Failed to get user information",
+            "message_code": "GET_USER_FAILED"}, 500
+        finally:
+            # 強制記憶體清理 - 這是修正閃退的關鍵
+            try:
+                # 確保資料庫連接正確關閉
+                try:
+                    db.session.close()
+                    print("Database session closed")
+                except Exception as db_error:
+                    print(f"Error closing database session: {db_error}")
+                
+                import gc
+                # 清理大型局部變數
+                locals_to_clear = ['user', 'user_default', 'user_setting', 'user_vip', 'user_a1c', 'response_data']
+                for var_name in locals_to_clear:
+                    if var_name in locals():
+                        locals()[var_name] = None
+                        
+                # 強制垃圾回收
+                collected = gc.collect()
+                print(f"GC collected {collected} objects in get_user cleanup")
+                
+                # 記錄清理後的記憶體狀況
+                log_memory_usage("After get_user cleanup")
+                
+            except Exception as cleanup_error:
+                print(f"Cleanup error in get_user: {cleanup_error}")
 
     @staticmethod
     def update_user(email: str, user_data: dict):
@@ -690,7 +1205,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
             # 記錄更新前的狀態
@@ -733,7 +1249,8 @@ class AuthController:
                         if existing_user:
                             return {
                                 "status": "1",
-                                "message": "此 email 已被使用"
+                                "message": "This email is already in use",
+                                "message_code": "EMAIL_ALREADY_USED"
                             }, 409
                         user.email = new_email
             
@@ -766,7 +1283,8 @@ class AuthController:
                         if existing_user:
                             return {
                                 "status": "1",
-                                "message": "此帳號已被使用"
+                                "message": "This account is already in use",
+                                "message_code": "ACCOUNT_ALREADY_USED"
                             }, 409
                         user.account = new_account
 
@@ -779,14 +1297,16 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功"
+                "message": "Success",
+                "message_code": "SUCCESS"
             }, 200
             
         except Exception as e:
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "更新失敗"
+                "message": "Update failed",
+                "message_code": "UPDATE_FAILED"
             }, 500
 
     @staticmethod
@@ -798,7 +1318,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
             # 查詢或建立使用者設定
@@ -838,21 +1359,23 @@ class AuthController:
                 user_setting.unit_of_height = 1 if value else 0
 
             # 更新時間戳
-            user_setting.updated_at = datetime.now(timezone.utc)
+            user_setting.updated_at = datetime.now(TZ_TAIWAN)
             
             # 儲存到資料庫
             db.session.commit()
 
             return {
                 "status": "0",
-                "message": "成功"
+                "message": "Success",
+                "message_code": "SUCCESS"
             }, 200
             
         except Exception as e:  
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "更新設定失敗"
+                "message": "Failed to update settings",
+                "message_code": "UPDATE_SETTINGS_FAILED"
             }, 500
         
 
@@ -867,7 +1390,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 查詢使用者的病歷記錄
@@ -926,14 +1450,16 @@ class AuthController:
     
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "Success",
+                "message_code": "SUCCESS",
                 "medical_info": medical_info
             }, 200
     
         except Exception as e:
             return {
                 "status": "1",
-                "message": "取得病歷失敗"
+                "message": "Failed to get medical records",
+                "message_code": "GET_MEDICAL_RECORDS_FAILED"
             }, 500
 
     @staticmethod
@@ -945,7 +1471,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
             # 查詢或建立使用者病歷記錄
@@ -958,8 +1485,8 @@ class AuthController:
                     oad=0.0,            # 設定預設值
                     insulin=0.0,        # 設定預設值
                     anti_hypertensives=0.0,  # 設定預設值
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc)
+                    created_at=datetime.now(TZ_TAIWAN),
+                    updated_at=datetime.now(TZ_TAIWAN)
                 )
                 db.session.add(user_medical)
 
@@ -990,21 +1517,23 @@ class AuthController:
                 user_medical.anti_hypertensives = 1.0 if value else 0.0
 
             # 更新時間戳
-            user_medical.updated_at = datetime.now(timezone.utc)
+            user_medical.updated_at = datetime.now(TZ_TAIWAN)
             
             # 儲存到資料庫
             db.session.commit()
 
             return {
                 "status": "0",
-                "message": "成功"
+                "message": "Success",
+                "message_code": "SUCCESS"
             }, 200
             
         except Exception as e:
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "更新病歷失敗"
+                "message": "Failed to update medical records",
+                "message_code": "UPDATE_MEDICAL_RECORDS_FAILED"
             }, 500
         
     @staticmethod
@@ -1016,14 +1545,16 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 驗證 A1c 值
             if a1c_value <= 0 or a1c_value > 20:
                 return {
                     "status": "1",
-                    "message": "HbA1c 值無效"
+                    "message": "Invalid HbA1c value",
+                    "message_code": "INVALID_HBA1C"
                 }, 400
             
             # 解析日期
@@ -1032,7 +1563,8 @@ class AuthController:
             except ValueError:
                 return {
                     "status": "1",
-                    "message": "日期格式錯誤，應為 YYYY-MM-DD"
+                    "message": "Date format error, should be YYYY-MM-DD",
+                    "message_code": "INVALID_DATE_FORMAT"
                 }, 400
             
             # 檢查是否已有相同日期的記錄
@@ -1044,7 +1576,7 @@ class AuthController:
             if existing_record:
                 # 更新現有記錄
                 existing_record.A1c = a1c_value
-                existing_record.updated_at = datetime.now(timezone.utc)
+                existing_record.updated_at = datetime.now(TZ_TAIWAN)
             else:
                 # 新增 HbA1c 記錄
                 new_a1c = A1cRecord(
@@ -1058,14 +1590,16 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功"
+                "message": "Success",
+                "message_code": "SUCCESS"
             }, 201
             
         except Exception as e:
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "新增 HbA1c 記錄失敗"
+                "message": "Failed to add HbA1c record",
+                "message_code": "ADD_HBA1C_FAILED"
             }, 500
         
     @staticmethod
@@ -1077,7 +1611,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 查詢 HbA1c 記錄
@@ -1097,7 +1632,8 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "Success",
+                "message_code": "SUCCESS",
                 "a1cs": records_list  
             }, 200
             
@@ -1105,7 +1641,8 @@ class AuthController:
             print(traceback.format_exc())
             return {
                 "status": "1",
-                "message": "取得 HbA1c 記錄失敗"
+                "message": "Failed to get HbA1c records",
+                "message_code": "GET_HBA1C_FAILED"
             }, 500
         
 
@@ -1118,14 +1655,16 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 驗證 care_data
             if not care_data or not care_data.strip():
                 return {
                     "status": "1",
-                    "message": "care_data 不能為空"
+                    "message": "Care data cannot be empty",
+                    "message_code": "CARE_DATA_REQUIRED"
                 }, 400
 
             # 檢查是否已有相同的照護紀錄
@@ -1135,7 +1674,7 @@ class AuthController:
             ).first()
 
             if existing_record:
-                existing_record.updated_at = datetime.now(timezone.utc)
+                existing_record.updated_at = datetime.now(TZ_TAIWAN)
             else:
                 # 新增 Care 記錄
                 new_care = A1cRecord(
@@ -1147,14 +1686,16 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "Success",
+                "message_code": "SUCCESS",
             }, 201
             
         except Exception as e:
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "新增 Care 記錄失敗"
+                "message": "Failed to add care record",
+                "message_code": "ADD_CARE_FAILED"
             }, 500
         
 
@@ -1167,7 +1708,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 查詢 Care 記錄
@@ -1186,17 +1728,17 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "Success",
+                "message_code": "SUCCESS",
                 "cares": records_list
             }, 200
             
         except Exception as e:
             return {
                 "status": "1",
-                "message": "取得 Care 記錄失敗"
+                "message": "Failed to get care records",
+                "message_code": "GET_CARE_FAILED"
             }, 500
-
-    
 
 
 
@@ -1204,40 +1746,56 @@ class AuthController:
     def add_share_record(email: str, record_type: int, record_id: int, relation_type: int):
         print("Adding share record...")
         try:
-            # 查詢使用者
             user = User.query.filter_by(email=email).first()
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
+            
+            print(f"Adding share record for user {user.id}: type={record_type}, id={record_id}, relation_type={relation_type}")
             
             # 驗證輸入參數
             if record_type not in [0, 1, 2, 3]:
                 return {
                     "status": "1",
-                    "message": "type 參數無效"
+                    "message": "Invalid type parameter",
+                    "message_code": "INVALID_TYPE"
                 }, 400
 
             if relation_type not in [0, 1, 2]:
                 return {
                     "status": "1",
-                    "message": "relation_type 參數無效"
+                    "message": "Invalid relation_type parameter",
+                    "message_code": "INVALID_RELATION_TYPE"
                 }, 400
                 
             if not record_id or record_id <= 0:
                 return {
                     "status": "1",
-                    "message": "record_id 參數無效"
+                    "message": "Invalid record_id parameter",
+                    "message_code": "INVALID_RECORD_ID"
                 }, 400
             
-            # 新增：檢查使用者是否有對應類型的好友
-            if not AuthController.has_friend_in_relation(user.id, relation_type):
-                relation_names = {0: "醫師團", 1: "親友團", 2: "糖友團"}
+            # 查詢使用者是否有對應類型的好友
+            friend_count = Friend.query.filter_by(
+                user_id=user.id,
+                relation_type=relation_type
+            ).count()
+            
+            print(f"User {user.id} has {friend_count} friends of type {relation_type}")
+
+            # 檢查是否有對應類型的好友
+            if friend_count == 0:
+                relation_names = {0: "醫師團", 1: "親友團", 2: "控糖團"}
+                print(f"User {user.id} has no friends of type {relation_type}")
                 return {
-                    "status": "1",
-                    "message": f"您尚未加入{relation_names.get(relation_type, '該')}，請先新增好友"
+                    "status": "1", 
+                    "message": f"請先新增{relation_names.get(relation_type, '好友')}"
                 }, 400
+            
+            print(f"Friend count check passed, proceeding to check existing share")
             
             # 檢查是否已經分享過相同記錄
             existing_share = ShareRecord.query.filter_by(
@@ -1247,34 +1805,63 @@ class AuthController:
                 relation_type=relation_type
             ).first()
             
-            if existing_share:
-                # 更新分享時間
-                existing_share.shared_at = datetime.now(timezone.utc)
-            else:
-                # 建立新的分享記錄
-                new_share = ShareRecord(
-                    user_id=user.id,
-                    record_type=record_type,
-                    record_id=record_id,
-                    relation_type=relation_type,
-                    shared_at=datetime.now(timezone.utc)
-                )
-                db.session.add(new_share)
+            print(f"Checking for existing share record...")
             
+            if existing_share:
+                print(f"Share record already exists: {existing_share.id}, updating timestamp")
+                # 修正：允許更新分享時間，而不是返回錯誤
+                existing_share.shared_at = datetime.now(TZ_TAIWAN)
+                existing_share.updated_at = datetime.now(TZ_TAIWAN)
+                db.session.commit()
+                
+                return {
+                    "status": "0",
+                    "message": "Update share successful",
+                    "message_code": "UPDATE_SHARE_SUCCESS"
+                }, 200
+            
+            print(f"Creating new share record...")
+            
+            # 建立新的分享記錄
+            new_share = ShareRecord(
+                user_id=user.id,
+                record_type=record_type,
+                record_id=record_id,
+                relation_type=relation_type,
+                shared_at=datetime.now(TZ_TAIWAN),
+                created_at=datetime.now(TZ_TAIWAN),
+                updated_at=datetime.now(TZ_TAIWAN)
+            )
+            
+            db.session.add(new_share)
             db.session.commit()
+            
+            print(f"Share record created successfully: {new_share.id}")
 
             return {
                 "status": "0",
-                "message": "成功"
+                "message": "Share successful",
+                "message_code": "SHARE_SUCCESS"
             }, 200
             
         except Exception as e:
             print(f"add_share_record error: {str(e)}")
+            print(traceback.format_exc())
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "分享失敗"
+                "message": "Share failed",
+                "message_code": "SHARE_FAILED"
             }, 500
+
+
+
+
+
+
+
+
+
 
     # 新增輔助方法：檢查使用者是否有特定關係類型的好友
     @staticmethod
@@ -1296,411 +1883,307 @@ class AuthController:
             print(f"Check friend relation error: {str(e)}")
             return False
 
+
     @staticmethod
     def get_shared_records(email: str, relation_type):
-        print(f"Getting shared records for email: {email}, relation_type: {relation_type}")
+        print(f"=== GET SHARED RECORDS START ===")
+        print(f"Email: {email}, relation_type: {relation_type}")
+        log_memory_usage("Start get_shared_records")
         
         try:
-            # 1) 基本檢查
             user = User.query.filter_by(email=email).first()
             if not user:
-                print(f"User not found for email: {email}")
-                return {"status": "1", "message": "使用者不存在"}, 404
+                return {"status": "1", "message": "User not found",
+                "message_code": "USER_NOT_FOUND"}, 404
 
-            print(f"Found user: {user.id}")
+            # 參數轉換
+            try:
+                relation_type_int = int(str(relation_type).strip())
+                if relation_type_int not in [0, 1, 2]:
+                    return {"status": "1", "message": "Invalid relation_type parameter",
+                    "message_code": "INVALID_RELATION_TYPE"}, 400
+            except (ValueError, TypeError):
+                return {"status": "1", "message": "Invalid relation_type parameter format",
+                "message_code": "INVALID_RELATION_TYPE_FORMAT"}, 400
 
-            # 參數驗證 - 處理路徑參數(字串類型)
-            # 前端對應: 醫師團=0, 親友團=1, 控糖團=2
-            print(f"Original relation_type: {relation_type}, type: {type(relation_type)}")
+            print(f"User ID: {user.id}, relation_type: {relation_type_int}")
+
+            # 查詢分享記錄 - 限制數量避免記憶體問題
+            share_records = ShareRecord.query.filter_by(
+                user_id=user.id, 
+                relation_type=relation_type_int
+            ).limit(20).all()
             
-            try:
-                # 路徑參數都是字串，需要轉換
-                if isinstance(relation_type, str):
-                    relation_type = relation_type.strip()
-                    print(f"Stripped relation_type: '{relation_type}'")
-                    
-                    # 檢查是否為數字字串
-                    if not relation_type.isdigit():
-                        print(f"relation_type is not digit: '{relation_type}'")
-                        return {"status": "1", "message": "type 參數格式錯誤"}, 400
-                        
-                    relation_type_int = int(relation_type)
-                elif isinstance(relation_type, int):
-                    relation_type_int = relation_type
-                else:
-                    print(f"Unexpected relation_type type: {type(relation_type)}")
-                    return {"status": "1", "message": "type 參數格式錯誤"}, 400
-                    
-            except (ValueError, TypeError) as e:
-                print(f"Parameter conversion error: {e}")
-                return {"status": "1", "message": "type 參數格式錯誤"}, 400
+            print(f"Found {len(share_records)} share records")
+            log_memory_usage("After query in get_shared_records")
 
-            print(f"Converted relation_type_int: {relation_type_int}")
+            if not share_records:
+                return {"status": "0", "message": "Success",
+                "message_code": "SUCCESS", "records": []}, 200
 
-            if relation_type_int not in (0, 1, 2):
-                print(f"Invalid relation_type_int: {relation_type_int}")
-                return {"status": "1", "message": "type 參數無效"}, 400
-
-            # 對應關係確認
-            type_names = {0: "醫師團", 1: "親友團", 2: "控糖團"}
-            print(f"Requesting records for: {type_names.get(relation_type_int, 'Unknown')}")
-
-            # 2) 查詢分享記錄
-            try:
-                print(f"Querying ShareRecord table for user_id: {user.id}")
-                
-                print(f"Querying share records for user with relation_type: {relation_type_int} ({type_names.get(relation_type_int)})")
-                share_records = ShareRecord.query.filter_by(
-                    user_id=user.id, 
-                    relation_type=relation_type_int
-                ).all()
-                
-                print(f"Found {len(share_records)} share records")
-                
-                # 如果沒有找到記錄，輸出更多調試信息
-                if len(share_records) == 0:
-                    print("No share records found, checking total records for this user...")
-                    all_user_shares = ShareRecord.query.filter_by(user_id=user.id).all()
-                    print(f"User has {len(all_user_shares)} total share records")
-                    for share in all_user_shares:
-                        print(f"  Share ID: {share.id}, relation_type: {getattr(share, 'relation_type', 'None')}")
-                
-            except Exception as e:
-                print(f"Database query error in ShareRecord: {str(e)}")
-                import traceback
-                traceback.print_exc()
-                return {"status": "1", "message": "查詢資料失敗"}, 500
-
-            # 統一使用 timezone.utc
-            tz_utc = timezone.utc
-            records_list = []
-
-            for i, share in enumerate(share_records):
-                print(f"Processing share record {i+1}/{len(share_records)}: ID={share.id}, record_id={getattr(share, 'record_id', 'None')}")
-                
+            # 修正的時間格式化函數
+            def safe_datetime_simple(dt):
                 try:
-                    # 檢查必要屬性
-                    if not hasattr(share, 'record_id') or share.record_id is None:
-                        print(f"Share record {share.id} has invalid record_id: {getattr(share, 'record_id', 'None')}")
-                        continue
-
-                    # 檢查 record_type 確保查詢正確的表
-                    share_record_type = getattr(share, 'record_type', None)
-                    print(f"Share record_type: {share_record_type}")
+                    if dt is None:
+                        return ""
                     
-                    # 根據 record_type 決定查詢哪個表
-                    # 假設: 0=日記, 1=血壓, 2=血糖, 3=其他
+                    # 檢查是否為日期時間物件
+                    if not hasattr(dt, 'strftime'):
+                        # 如果不是日期時間物件，直接返回空字串
+                        return ""
+                    
+                    # 確保 datetime 物件有時區資訊
+                    if hasattr(dt, 'tzinfo') and dt.tzinfo is None:
+                        # 如果沒有時區資訊，假設是台灣時區
+                        dt = dt.replace(tzinfo=TZ_TAIWAN)
+                    elif hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+                        # 如果有時區資訊，轉換到台灣時區
+                        dt = dt.astimezone(TZ_TAIWAN)
+                    
+                    # 使用標準格式
+                    return dt.strftime("%Y-%m-%d %H:%M:%S")
+                    
+                except AttributeError as e:
+                    # datetime 物件沒有預期的屬性
+                    print(f"DateTime attribute error: {e}")
+                    return ""
+                except ValueError as e:
+                    # strftime 格式錯誤
+                    print(f"DateTime format error: {e}")
+                    return ""
+                except Exception as e:
+                    # 其他未預期的錯誤
+                    print(f"Unexpected datetime error: {e}")
+                    return ""
+
+            # 安全的數值獲取函數
+            def safe_get(obj, attr, default=0):
+                try:
+                    if obj is None:
+                        return default
+                    value = getattr(obj, attr, default)
+                    return value if value is not None else default
+                except Exception as e:
+                    print(f"Error getting attribute {attr}: {e}")
+                    return default
+
+            # 簡化的記錄處理
+            records_list = []
+            for share in share_records:
+                try:
+                    # 查詢對應的日記記錄
                     diary = None
-                    try:
-                        print(f"Querying diary with id: {share.record_id}")
-                        
-                        # 這裡需要根據您的實際數據庫結構調整
-                        # 如果不同 record_type 對應不同的表，請修改這裡
+                    if share.record_id:
                         diary = Diary.query.filter_by(id=share.record_id).first()
-                        
-                        if diary:
-                            print(f"Found diary record: {diary.id}")
-                        else:
-                            print(f"No diary found for record_id: {share.record_id}")
-                            # 檢查記錄是否存在於其他表中
-                            print(f"Checking if record_id {share.record_id} exists in database...")
-                            
-                    except Exception as e:
-                        print(f"Diary query error for record_id {share.record_id}: {str(e)}")
-                        import traceback
-                        traceback.print_exc()
-                        continue
 
-                    # 安全轉換函數
-                    def safe_int(value, default=0, field_name=""):
-                        try:
-                            if value is None:
-                                return default
-                            if isinstance(value, str) and value.strip() == "":
-                                return default
-                            result = int(float(value))
-                            return result
-                        except (ValueError, TypeError) as e:
-                            if field_name:
-                                print(f"safe_int conversion error for {field_name} '{value}': {e}")
-                            return default
-
-                    def safe_float(value, default=0.0, field_name=""):
-                        try:
-                            if value is None:
-                                return default
-                            if isinstance(value, str) and value.strip() == "":
-                                return default
-                            result = float(value)
-                            return result
-                        except (ValueError, TypeError) as e:
-                            if field_name:
-                                print(f"safe_float conversion error for {field_name} '{value}': {e}")
-                            return default
-
-                    def safe_str(value, default="", field_name=""):
-                        try:
-                            if value is None:
-                                return default
-                            return str(value)
-                        except Exception as e:
-                            if field_name:
-                                print(f"safe_str conversion error for {field_name} '{value}': {e}")
-                            return default
-
-                    # 基本數值欄位
-                    systolic = safe_int(getattr(diary, "systolic", 0) if diary else 0, 0, "systolic")
-                    diastolic = safe_int(getattr(diary, "diastolic", 0) if diary else 0, 0, "diastolic")
-                    bmi = safe_int(getattr(diary, "bmi", 0) if diary else 0, 0, "bmi")
-                    pulse = safe_int(getattr(diary, "pulse", 0) if diary else 0, 0, "pulse")
-                    meal = safe_int(getattr(diary, "meal", 0) if diary else 0, 0, "meal")
-                    weight = safe_float(getattr(diary, "weight", 0.0) if diary else 0.0, 0.0, "weight")
-                    body_fat = safe_float(getattr(diary, "body_fat", 0.0) if diary else 0.0, 0.0, "body_fat")
-                    sugar = safe_float(getattr(diary, "sugar", 0.0) if diary else 0.0, 0.0, "sugar")
-
-                    print(f"Processed basic numeric fields for record {share.id}")
-
-                    # 複雜欄位處理 - tag
-                    tag_2d = [[]]
-                    try:
-                        tag_raw = getattr(diary, "tag", None) if diary else None
-                        print(f"Processing tag_raw: {type(tag_raw)}, value preview: {str(tag_raw)[:100] if tag_raw else 'None'}")
-                        
-                        if tag_raw is not None:
-                            if isinstance(tag_raw, list):
-                                rows = []
-                                for item in tag_raw:
-                                    if isinstance(item, list):
-                                        rows.append([safe_str(x, "", f"tag_item") for x in item])
-                                    elif isinstance(item, dict):
-                                        names = item.get("name") if "name" in item else None
-                                        if isinstance(names, list):
-                                            rows.append([safe_str(x, "", f"tag_name") for x in names])
-                                        else:
-                                            rows.append([])
-                                    else:
-                                        # 單個值也轉為列表
-                                        rows.append([safe_str(item, "", "tag_single")])
-                                tag_2d = rows if rows else [[]]
-                            elif isinstance(tag_raw, dict):
-                                names = tag_raw.get("name")
-                                if isinstance(names, list):
-                                    tag_2d = [[safe_str(x, "", "tag_dict_name") for x in names]]
-                                else:
-                                    tag_2d = [[safe_str(names, "", "tag_dict_single")] if names else []]
-                            elif isinstance(tag_raw, str):
-                                # 字串可能是 JSON 格式，嘗試解析
-                                try:
-                                    import json
-                                    parsed = json.loads(tag_raw)
-                                    if isinstance(parsed, list):
-                                        tag_2d = [[safe_str(x, "", "tag_json") for x in parsed]]
-                                    else:
-                                        tag_2d = [[safe_str(tag_raw, "", "tag_str")]]
-                                except:
-                                    tag_2d = [[safe_str(tag_raw, "", "tag_str_fallback")]]
-                            else:
-                                tag_2d = [[safe_str(tag_raw, "", "tag_other")]]
-                                
-                    except Exception as e:
-                        print(f"Tag processing error for record {share.id}: {str(e)}")
-                        import traceback
-                        traceback.print_exc()
-                        tag_2d = [[]]
-
-                    # 複雜欄位處理 - image
-                    image_1d = []
-                    try:
-                        image_raw = getattr(diary, "image", None) if diary else None
-                        print(f"Processing image_raw: {type(image_raw)}")
-                        
-                        if image_raw is not None:
-                            if isinstance(image_raw, list):
-                                image_1d = [safe_str(x, "", "image_item") for x in image_raw if x is not None]
-                            elif isinstance(image_raw, str):
-                                if image_raw.strip():
-                                    # 可能是 JSON 字串
-                                    try:
-                                        import json
-                                        parsed = json.loads(image_raw)
-                                        if isinstance(parsed, list):
-                                            image_1d = [safe_str(x, "", "image_json") for x in parsed if x is not None]
-                                        else:
-                                            image_1d = [safe_str(image_raw, "", "image_str")]
-                                    except:
-                                        image_1d = [safe_str(image_raw, "", "image_str_fallback")]
-                            else:
-                                image_1d = [safe_str(image_raw, "", "image_other")]
-                                
-                    except Exception as e:
-                        print(f"Image processing error for record {share.id}: {str(e)}")
-                        import traceback
-                        traceback.print_exc()
-                        image_1d = []
-
-                    # 複雜欄位處理 - location
-                    location_obj = {"lat": "", "lng": "", "address": ""}
-                    try:
-                        location_raw = getattr(diary, "location", None) if diary else None
-                        print(f"Processing location_raw: {type(location_raw)}")
-                        
-                        if location_raw is not None:
-                            if isinstance(location_raw, dict):
-                                lat_val = (location_raw.get("lat") or location_raw.get("latitude") or 
-                                        location_raw.get("y") or "")
-                                lng_val = (location_raw.get("lng") or location_raw.get("lon") or
-                                        location_raw.get("long") or location_raw.get("longitude") or
-                                        location_raw.get("x") or "")
-                                addr_val = (location_raw.get("address") or location_raw.get("name") or
-                                        location_raw.get("text") or location_raw.get("display_name") or "")
-                                
-                                location_obj = {
-                                    "lat": safe_str(lat_val, "", "location_lat"), 
-                                    "lng": safe_str(lng_val, "", "location_lng"), 
-                                    "address": safe_str(addr_val, "", "location_addr")
-                                }
-                            elif isinstance(location_raw, list) and len(location_raw) >= 2:
-                                location_obj = {
-                                    "lat": safe_str(location_raw[0], "", "location_list_lat"), 
-                                    "lng": safe_str(location_raw[1], "", "location_list_lng"), 
-                                    "address": ""
-                                }
-                            elif isinstance(location_raw, str):
-                                if "," in location_raw:
-                                    parts = [p.strip() for p in location_raw.split(",")]
-                                    if len(parts) >= 2:
-                                        location_obj = {"lat": parts[0], "lng": parts[1], "address": ""}
-                                    else:
-                                        location_obj = {"lat": "", "lng": "", "address": location_raw}
-                                else:
-                                    # 可能是 JSON 字串
-                                    try:
-                                        import json
-                                        parsed = json.loads(location_raw)
-                                        if isinstance(parsed, dict):
-                                            lat_val = (parsed.get("lat") or parsed.get("latitude") or parsed.get("y") or "")
-                                            lng_val = (parsed.get("lng") or parsed.get("lon") or parsed.get("longitude") or parsed.get("x") or "")
-                                            addr_val = (parsed.get("address") or parsed.get("name") or "")
-                                            location_obj = {"lat": safe_str(lat_val), "lng": safe_str(lng_val), "address": safe_str(addr_val)}
-                                        else:
-                                            location_obj = {"lat": "", "lng": "", "address": safe_str(location_raw)}
-                                    except:
-                                        location_obj = {"lat": "", "lng": "", "address": safe_str(location_raw)}
-                            else:
-                                location_obj = {"lat": "", "lng": "", "address": safe_str(location_raw, "", "location_fallback")}
-                                
-                    except Exception as e:
-                        print(f"Location processing error for record {share.id}: {str(e)}")
-                        import traceback
-                        traceback.print_exc()
-                        location_obj = {"lat": "", "lng": "", "address": safe_str(location_raw, "", "location_fallback")}
-
-                    # user 物件
-                    user_obj = {
-                        "id": user.id,
-                        "name": safe_str(user.name, "", "user_name"),
-                        "email": safe_str(user.email, "", "user_email"),
-                        "account": safe_str(user.account, "", "user_account"),
+                    # 構建簡化的記錄資料
+                    record_data = {
+                        "id": share.id,
+                        "user_id": share.user_id,
+                        "relation_id": safe_get(share, "relation_id", 0),
+                        "user": {
+                            "id": user.id,
+                            "name": safe_get(user, "name", ""),
+                            "email": safe_get(user, "email", ""),
+                            "account": safe_get(user, "account", "")
+                        },
+                        "type": safe_get(share, "record_type", 0),
+                        "record_type": safe_get(share, "record_type", 0),
+                        "weight": float(safe_get(diary, "weight", 0)),
+                        "body_fat": float(safe_get(diary, "body_fat", 0)),
+                        "sugar": float(safe_get(diary, "sugar", 0)),
+                        "meal_type": int(safe_get(diary, "meal", 0)),
+                        "bmi": float(safe_get(diary, "bmi", 0)),
+                        "shared_at": safe_datetime_simple(share.shared_at),
+                        "recorded_at": safe_datetime_simple(safe_get(diary, "recorded_at")),
+                        "created_at": safe_datetime_simple(safe_get(diary, "created_at")),
+                        "meal": int(safe_get(diary, "meal", 0)),
+                        "timeperiod": int(safe_get(diary, "timeperiod", 0)),
+                        "tag": [[]],
+                        "image": [],
+                        "location": {"lat": "", "lng": "", "address": ""},
+                        "relation_type": safe_get(share, "relation_type", 0),
+                        "systolic": int(safe_get(diary, "systolic", 0)),
+                        "diastolic": int(safe_get(diary, "diastolic", 0)),
+                        "pulse": int(safe_get(diary, "pulse", 0)),
+                        "message": str(safe_get(diary, "description", "")),
+                        "url": "",
+                        "record_status": 0
                     }
-
-                    # 時間處理函數
-                    def safe_datetime_to_iso(dt_value, field_name=""):
-                        try:
-                            if isinstance(dt_value, datetime):
-                                if dt_value.tzinfo is None:
-                                    dt_value = dt_value.replace(tzinfo=tz_utc)
-                                return dt_value.astimezone(tz_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                            elif isinstance(dt_value, (int, float)):
-                                return datetime.fromtimestamp(float(dt_value), tz=tz_utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                            elif isinstance(dt_value, str):
-                                return dt_value.strip() if dt_value else ""
-                            else:
-                                return ""
-                        except Exception as e:
-                            print(f"DateTime conversion error for {field_name}: {e}")
-                            return ""
-
-                    def safe_datetime_to_string(dt_value, field_name=""):
-                        try:
-                            if isinstance(dt_value, datetime):
-                                return dt_value.strftime("%Y-%m-%d %H:%M:%S")
-                            else:
-                                return ""
-                        except Exception as e:
-                            print(f"DateTime string conversion error for {field_name}: {e}")
-                            return ""
-
-                    # 時間欄位處理
-                    recorded_at = safe_datetime_to_iso(
-                        getattr(diary, "recorded_at", None) if diary else None, 
-                        "recorded_at"
-                    )
-                    shared_at = safe_datetime_to_iso(
-                        getattr(share, "shared_at", None), 
-                        "shared_at"
-                    )
-                    created_at = safe_datetime_to_string(
-                        getattr(diary, "created_at", None) if diary else None, 
-                        "created_at"
-                    )
-
-                    print(f"Processed datetime fields for record {share.id}")
-
-                    # 組裝最終記錄
-                    try:
-                        record_data = {
-                            "id": share.id,
-                            "user_id": share.user_id,
-                            "relation_id": safe_int(getattr(share, "relation_id", 0), 0, "relation_id"),
-                            "user": user_obj,
-                            "type": safe_int(getattr(share, "record_type", 0), 0, "type"),
-                            "record_type": safe_int(getattr(share, "record_type", 0), 0, "record_type"),
-                            "weight": weight,
-                            "body_fat": body_fat,
-                            "sugar": sugar,
-                            "meal_type": safe_int(getattr(diary, "meal_type", 0) if diary else 0, 0, "meal_type"),
-                            "bmi": bmi,
-                            "shared_at": shared_at,
-                            "recorded_at": recorded_at,
-                            "created_at": created_at,
-                            "meal": meal,
-                            "timeperiod": safe_int(getattr(diary, "timeperiod", 0) if diary else 0, 0, "timeperiod"),
-                            "tag": tag_2d,
-                            "image": image_1d,
-                            "location": location_obj,
-                            "relation_type": safe_int(getattr(share, "relation_type", 0), 0, "share_relation_type"),
-                            "systolic": systolic,
-                            "diastolic": diastolic,
-                            "pulse": pulse,
-                            "message": safe_str(getattr(diary, "message", "") if diary else "", "", "message"),
-                            "url": safe_str(getattr(diary, "url", "") if diary else "", "", "url"),
-                            "record_status": safe_int(getattr(diary, "status", 0) if diary else 0, 0, "record_status"),
-                        }
-
-                        records_list.append(record_data)
-                        print(f"Successfully processed and added record {share.id}")
-                        
-                    except Exception as e:
-                        print(f"Error assembling record data for share {share.id}: {str(e)}")
-                        import traceback
-                        traceback.print_exc()
-                        continue
+                    
+                    records_list.append(record_data)
+                    print(f"Successfully processed record {share.id}")
+                    
+                    # 立即清理 diary 物件以節省記憶體
+                    diary = None
                     
                 except Exception as e:
-                    print(f"Error processing share record {share.id}: {str(e)}")
-                    import traceback
-                    traceback.print_exc()
+                    print(f"Error processing share record {share.id}: {e}")
                     continue
 
-            print(f"Returning {len(records_list)} processed records out of {len(share_records)} total share records")
-            return {"status": "0", "message": "成功", "records": records_list}, 200
+            print(f"=== RETURNING {len(records_list)} RECORDS ===")
+            log_memory_usage("End get_shared_records")
+            return {"status": "0", "message": "Success",
+            "message_code": "SUCCESS", "records": records_list}, 200
 
         except Exception as e:
-            print(f"get_shared_records critical error: {str(e)}")
+            print(f"Critical error in get_shared_records: {str(e)}")
             import traceback
             traceback.print_exc()
-            return {"status": "1", "message": "獲取分享記錄失敗"}, 500
+            log_memory_usage("Error in get_shared_records")
+            return {"status": "1", "message": "Failed to get share records",
+            "message_code": "GET_SHARE_RECORDS_FAILED"}, 500
+        finally:
+            # 強制記憶體清理
+            try:
+                import gc
+                # 清理局部變數
+                locals_to_clear = ['user', 'share_records', 'records_list', 'diary']
+                for var_name in locals_to_clear:
+                    if var_name in locals():
+                        locals()[var_name] = None
+                
+                # 強制垃圾回收
+                collected = gc.collect()
+                print(f"GC collected {collected} objects in get_shared_records cleanup")
+                
+                # 記錄清理後的記憶體狀況
+                log_memory_usage("After get_shared_records cleanup")
+                
+            except Exception as cleanup_error:
+                print(f"Cleanup error in get_shared_records: {cleanup_error}")
 
+
+
+
+    # @staticmethod
+    # def get_shared_records(email: str, relation_type):
+    #     print(f"=== GET SHARED RECORDS START ===")
+    #     print(f"Email: {email}, relation_type: {relation_type}")
+        
+    #     try:
+    #         user = User.query.filter_by(email=email).first()
+    #         if not user:
+    #             return {"status": "1", "message": "User not found",
+    #                     "message_code": "USER_NOT_FOUND"}, 404
+
+    #         print(f"Found user ID: {user.id}")
+
+    #         # 參數轉換
+    #         try:
+    #             relation_type_int = int(str(relation_type).strip())
+    #             print(f"Converted relation_type: {relation_type_int}")
+    #         except (ValueError, TypeError) as e:
+    #             print(f"Parameter conversion error: {e}")
+    #             return {"status": "1", "message": "Invalid type parameter format",
+    #                     "message_code": "INVALID_TYPE_FORMAT"}, 400
+
+    #         # 查詢分享記錄
+    #         share_records = ShareRecord.query.filter_by(
+    #             user_id=user.id, 
+    #             relation_type=relation_type_int
+    #         ).all()
+            
+    #         print(f"Found {len(share_records)} share records")
+
+    #         if len(share_records) == 0:
+    #             print("No share records found, returning empty list")
+    #             return {"status": "0", "message": "Success",
+    #                     "message_code": "SUCCESS", "records": []}, 200
+
+    #         # 處理每筆記錄
+    #         records_list = []
+    #         for i, share in enumerate(share_records):
+    #             try:
+    #                 print(f"Processing share record {i+1}/{len(share_records)}: ID={share.id}")
+                    
+    #                 # 查詢對應的日記記錄
+    #                 diary = None
+    #                 if share.record_id:
+    #                     diary = Diary.query.filter_by(id=share.record_id).first()
+    #                     print(f"Found diary record: {share.record_id}" if diary else f"No diary found for ID: {share.record_id}")
+
+    #                 # 安全的資料轉換函數
+    #                 def safe_value(value, default, data_type=str):
+    #                     try:
+    #                         if value is None:
+    #                             return default
+    #                         if data_type == int:
+    #                             return int(value)
+    #                         elif data_type == float:
+    #                             return float(value)
+    #                         else:
+    #                             return str(value)
+    #                     except:
+    #                         return default
+
+    #                 def safe_datetime(dt):
+    #                     try:
+    #                         if dt is None:
+    #                             return ""
+    #                         # 確保有時區資訊
+    #                         if dt.tzinfo is None:
+    #                             dt = dt.replace(tzinfo=TZ_TAIWAN)
+    #                         # 使用簡單格式
+    #                         return dt.strftime("%Y-%m-%d %H:%M:%S")
+    #                     except Exception as e:
+    #                         print(f"safe_datetime error: {e}")
+    #                         return ""
+
+    #                 # 構建記錄資料
+    #                 record_data = {
+    #                     "id": share.id,
+    #                     "user_id": share.user_id,
+    #                     "relation_id": safe_value(getattr(share, "relation_id", None), 0, int),
+    #                     "user": {
+    #                         "id": user.id,
+    #                         "name": safe_value(user.name, ""),
+    #                         "email": safe_value(user.email, ""),
+    #                         "account": safe_value(user.account, "")
+    #                     },
+    #                     "type": safe_value(share.record_type, 0, int),
+    #                     "record_type": safe_value(share.record_type, 0, int),
+    #                     "weight": safe_value(diary.weight if diary else None, 0.0, float),
+    #                     "body_fat": safe_value(diary.body_fat if diary else None, 0.0, float),
+    #                     "sugar": safe_value(diary.sugar if diary else None, 0.0, float),
+    #                     "meal_type": safe_value(diary.meal_type if diary else None, 0, int),
+    #                     "bmi": safe_value(diary.bmi if diary else None, 0, int),
+    #                     "shared_at": safe_datetime(share.shared_at),
+    #                     "recorded_at": safe_datetime(diary.recorded_at if diary else None),
+    #                     "created_at": safe_datetime(diary.created_at if diary else None),
+    #                     "meal": safe_value(diary.meal if diary else None, 0, int),
+    #                     "timeperiod": safe_value(diary.timeperiod if diary else None, 0, int),
+    #                     "tag": [[]],  # 簡化為空陣列
+    #                     "image": [],  # 簡化為空陣列
+    #                     "location": {"lat": "", "lng": "", "address": ""},  # 簡化位置
+    #                     "relation_type": safe_value(share.relation_type, 0, int),
+    #                     "systolic": safe_value(diary.systolic if diary else None, 0, int),
+    #                     "diastolic": safe_value(diary.diastolic if diary else None, 0, int),
+    #                     "pulse": safe_value(diary.pulse if diary else None, 0, int),
+    #                     "message": safe_value(diary.description if diary else None, ""),
+    #                     "url": safe_value(diary.url if diary and hasattr(diary, 'url') else None, ""),
+    #                     "record_status": safe_value(diary.status if diary and hasattr(diary, 'status') else None, 0, int)
+    #                 }
+                    
+    #                 records_list.append(record_data)
+    #                 print(f"Successfully processed record {i+1}")
+                    
+    #             except Exception as e:
+    #                 print(f"Error processing share record {share.id}: {e}")
+    #                 import traceback
+    #                 traceback.print_exc()
+    #                 continue
+
+    #         print(f"=== RETURNING {len(records_list)} RECORDS ===")
+    #         return {"status": "0", "message": "Success",
+    #                 "message_code": "SUCCESS", "records": records_list}, 200
+
+    #     except Exception as e:
+    #         print(f"Critical error in get_shared_records: {str(e)}")
+    #         import traceback
+    #         traceback.print_exc()
+    #         return {"status": "1", "message": "Failed to get share records",
+    #                 "message_code": "GET_SHARE_RECORDS_FAILED"}, 500
 
 
     @staticmethod
@@ -1712,7 +2195,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 查詢最新消息（可以根據群組或全部顯示）
@@ -1729,13 +2213,25 @@ class AuthController:
                         return dt.strftime(format_str)
                     except:
                         return default
+                
+                # 安全的字符串處理 - 避免中文字符
+                def safe_string(text, default=""):
+                    if not text:
+                        return default
+                    try:
+                        # 檢查是否含有非ASCII字符
+                        text.encode('ascii')
+                        return text
+                    except UnicodeEncodeError:
+                        # 如果包含中文或其他非ASCII字符，返回安全的替代文本
+                        return f"Content {news.id}"
             
                 news_data = {
                     "id": news.id,
                     "member_id": news.member_id,
                     "group": news.group,
-                    "title": news.title or "",
-                    "message": news.message or "",
+                    "title": safe_string(news.title, f"News {news.id}"),
+                    "message": safe_string(news.message, "Content available"),
                     "pushed_at": safe_strftime(news.pushed_at),
                     "created_at": safe_strftime(news.created_at),
                     "updated_at": safe_strftime(news.updated_at)
@@ -1745,14 +2241,17 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "News retrieved successfully",
+                "message_code": "SUCCESS",
                 "news": news_list
             }, 200
             
         except Exception as e:
+            print(f"Get news error: {str(e)}")
             return {
                 "status": "1",
-                "message": "取得最新消息失敗"
+                "message": "Failed to get news",
+                "message_code": "GET_NEWS_FAILED"
             }, 500
         
 
@@ -1766,33 +2265,89 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
-            # 查詢使用者的好友列表
-            friends = Friend.query.filter_by(user_id=user.id).order_by(Friend.created_at.desc()).all()
+            # 查詢已接受的好友關係（雙向查詢）
+            friends_results = db.session.query(FriendResult).filter(
+                db.or_(
+                    db.and_(FriendResult.user_id == user.id, FriendResult.status == 1),
+                    db.and_(FriendResult.relation_id == user.id, FriendResult.status == 1)
+                )
+            ).all()
             
             # 格式化回應資料
             friends_list = []
-            for friend in friends:
-                friend_data = {
-                    "id": friend.id,
-                    "name": friend.name or "",
-                    "relation_type": friend.relation_type
-                }
-                friends_list.append(friend_data)
+            seen_user_ids = set()  # 避免重複顯示同一個朋友
+            
+            for friend_result in friends_results:
+                # 確定對方的用戶ID
+                if friend_result.user_id == user.id:
+                    friend_user_id = friend_result.relation_id
+                else:
+                    friend_user_id = friend_result.user_id
+                
+                # 避免重複添加同一個朋友
+                if friend_user_id in seen_user_ids:
+                    continue
+                seen_user_ids.add(friend_user_id)
+                
+                # 獲取朋友的詳細信息
+                friend_user = User.query.get(friend_user_id)
+                if friend_user:
+                    # 生成安全的好友名稱（避免中文字符）
+                    friend_name = "Friend"
+                    if friend_user.name and friend_user.name.strip():
+                        # 如果有名稱但包含非ASCII字符，使用用戶ID
+                        try:
+                            friend_user.name.encode('ascii')
+                            friend_name = friend_user.name
+                        except UnicodeEncodeError:
+                            friend_name = f"User{friend_user.id}"
+                    elif friend_user.account and friend_user.account.strip():
+                        try:
+                            friend_user.account.encode('ascii')
+                            friend_name = friend_user.account
+                        except UnicodeEncodeError:
+                            friend_name = f"User{friend_user.id}"
+                    else:
+                        friend_name = f"User{friend_user.id}"
+                    
+                    # 關係類型轉換
+                    relation_type_name = "general"
+                    if friend_result.type == 0:
+                        relation_type_name = "control_group"
+                    elif friend_result.type == 1:
+                        relation_type_name = "family_group"
+                    elif friend_result.type == 2:
+                        relation_type_name = "doctor_group"
+                    
+                    friend_data = {
+                        "id": friend_user.id,
+                        "name": friend_name,
+                        "relation_type": friend_result.type,
+                        "relation_type_name": relation_type_name,
+                        "email": friend_user.email or "",
+                        "created_at": friend_result.created_at.isoformat() if friend_result.created_at else ""
+                    }
+                    friends_list.append(friend_data)
 
             return {
                 "status": "0",
-                "message": "成功",
-                "friends": friends_list
+                "message": "Friends retrieved successfully",
+                "message_code": "SUCCESS",
+                "friends": friends_list,
+                "total_count": len(friends_list)
             }, 200
             
         except Exception as e:
-            print(traceback.format_exc())  # 修正：移除參數 e
+            print(f"Get friend list error: {str(e)}")
+            print(traceback.format_exc())
             return {
                 "status": "1",
-                "message": "取得好友列表失敗"
+                "message": "Failed to retrieve friends list",
+                "message_code": "GET_FRIENDS_FAILED"
             }, 500
     
     @staticmethod
@@ -1804,21 +2359,24 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 驗證輸入
             if not friend_name or not friend_name.strip():
                 return {
                     "status": "1",
-                    "message": "好友名稱不能為空"
+                    "message": "Friend name cannot be empty",
+                    "message_code": "FRIEND_NAME_REQUIRED"
                 }, 400
             
             # 驗證 relation_type
             if relation_type not in [0, 1, 2]:
                 return {
                     "status": "1",
-                    "message": "relation_type 參數無效"
+                    "message": "Invalid relation_type parameter",
+                    "message_code": "INVALID_RELATION_TYPE"
                 }, 400
             
             # 檢查是否已存在相同名稱的好友
@@ -1830,7 +2388,8 @@ class AuthController:
             if existing_friend:
                 return {
                     "status": "1",
-                    "message": "此好友已存在"
+                    "message": "Friend already exists",
+                    "message_code": "FRIEND_ALREADY_EXISTS"
                 }, 409
             
             # 建立新好友
@@ -1838,22 +2397,24 @@ class AuthController:
                 user_id=user.id,
                 name=friend_name.strip(),
                 relation_type=relation_type,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
+                created_at=datetime.now(TZ_TAIWAN),
+                updated_at=datetime.now(TZ_TAIWAN)
             )
             db.session.add(new_friend)
             db.session.commit()
 
             return {
                 "status": "0",
-                "message": "成功"
+                "message": "Success",
+                "message_code": "SUCCESS"
             }, 201
             
         except Exception as e:
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "新增好友失敗"
+                "message": "Failed to add friend",
+                "message_code": "ADD_FRIEND_FAILED"
             }, 500
 
     @staticmethod
@@ -1865,7 +2426,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
             # 建立查詢
@@ -1881,7 +2443,8 @@ class AuthController:
                 except ValueError:
                     return {
                         "status": "1",
-                        "message": "日期格式錯誤，應為 YYYY-MM-DD"
+                        "message": "Date format error, should be YYYY-MM-DD",
+                        "message_code": "INVALID_DATE_FORMAT"
                     }, 400
 
             diary_records = query.order_by(Diary.recorded_at.desc()).all()
@@ -1957,7 +2520,8 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "Success",
+                "message_code": "SUCCESS",
                 "diary": diary_list
             }, 200
 
@@ -1966,7 +2530,8 @@ class AuthController:
             print(traceback.format_exc())
             return {
                 "status": "1",
-                "message": "取得日記失敗"
+                "message": "Failed to get diary entries",
+                "message_code": "GET_DIARY_FAILED"
             }, 500
     
     @staticmethod
@@ -1978,14 +2543,16 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 驗證 badge 參數 - 允許 badge 為 0
             if badge is None:
                 return {
                     "status": "1",
-                    "message": "Badge 參數不能為空"
+                    "message": "Badge parameter cannot be empty",
+                    "message_code": "BADGE_REQUIRED"
                 }, 400
             
             # 驗證 badge 是否為有效整數
@@ -1994,14 +2561,16 @@ class AuthController:
             except (ValueError, TypeError):
                 return {
                     "status": "1",
-                    "message": "Badge 必須為整數"
+                    "message": "Badge must be an integer",
+                    "message_code": "BADGE_MUST_BE_INTEGER"
                 }, 400
             
             # 修正：允許 badge 為 0，只檢查是否小於 0
             if badge < 0:
                 return {
                     "status": "1",
-                    "message": "Badge 不能為負數"
+                    "message": "Badge cannot be negative",
+                    "message_code": "BADGE_CANNOT_BE_NEGATIVE"
                 }, 400
             
             # 檢查是否有 user_default 記錄
@@ -2010,14 +2579,14 @@ class AuthController:
             if user_default:
                 # 更新現有記錄
                 user_default.badge = badge
-                user_default.updated_at = datetime.now(timezone.utc)
+                user_default.updated_at = datetime.now(TZ_TAIWAN)
             else:
                 # 建立新記錄
                 user_default = UserDefault(
                     user_id=user.id,
                     badge=badge,
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc)
+                    created_at=datetime.now(TZ_TAIWAN),
+                    updated_at=datetime.now(TZ_TAIWAN)
                 )
                 db.session.add(user_default)
             
@@ -2025,14 +2594,16 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功"
+                "message": "Success",
+                "message_code": "SUCCESS"
             }, 200
 
         except Exception as e:
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "更新徽章失敗"
+                "message": "Failed to update badge",
+                "message_code": "UPDATE_BADGE_FAILED"
             }, 500
 
     @staticmethod
@@ -2045,7 +2616,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 驗證 diet 參數
@@ -2055,7 +2627,8 @@ class AuthController:
                 except (ValueError, TypeError):
                     return {
                         "status": "1",
-                        "message": "diet 參數必須為整數"
+                        "message": "Diet parameter must be an integer",
+                        "message_code": "DIET_MUST_BE_INTEGER"
                     }, 400
             
             # 建立查詢條件
@@ -2098,7 +2671,8 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "Success",
+                "message_code": "SUCCESS",
                 "blood_sugars": blood_sugars,
                 "blood_pressures": blood_pressures,
                 "weights": weights
@@ -2109,7 +2683,8 @@ class AuthController:
             print(traceback.format_exc())
             return {
                 "status": "1",
-                "message": "取得健康記錄失敗"
+                "message": "Failed to get health records",
+                "message_code": "GET_HEALTH_RECORDS_FAILED"
             }, 500
 
 
@@ -2123,14 +2698,16 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
             
             # 驗證必要參數
             if sugar is None:
                 return {
                     "status": "1",
-                    "message": "sugar 參數不能為空"
+                    "message": "Sugar parameter cannot be empty",
+                    "message_code": "SUGAR_REQUIRED"
                 }, 400
             
             # 驗證血糖值
@@ -2139,26 +2716,29 @@ class AuthController:
                 if sugar <= 0 or sugar > 1000:
                     return {
                         "status": "1",
-                        "message": "血糖值無效"
+                        "message": "Invalid blood sugar value",
+                        "message_code": "INVALID_BLOOD_SUGAR"
                     }, 400
             except (ValueError, TypeError):
                 return {
                     "status": "1",
-                    "message": "血糖值必須為數字"
+                    "message": "Blood sugar value must be a number",
+                    "message_code": "BLOOD_SUGAR_MUST_BE_NUMBER"
                 }, 400
             
             # 處理記錄時間
             if recorded_at:
                 try:
                     recorded_datetime = datetime.strptime(recorded_at, "%Y-%m-%d %H:%M:%S")
-                    recorded_datetime = recorded_datetime.replace(tzinfo=timezone.utc)
+                    recorded_datetime = recorded_datetime.replace(tzinfo=TZ_TAIWAN)  # 修正：使用台灣時區
                 except ValueError:
                     return {
                         "status": "1",
-                        "message": "recorded_at 格式錯誤，應為 YYYY-MM-DD HH:MM:SS"
+                        "message": "Invalid recorded_at format, should be YYYY-MM-DD HH:MM:SS",
+                        "message_code": "INVALID_RECORDED_AT_FORMAT"
                     }, 400
             else:
-                recorded_datetime = datetime.now(timezone.utc)
+                recorded_datetime = datetime.now(TZ_TAIWAN)  # 修正：使用台灣時區
             
             # 建立血糖記錄
             new_blood_sugar = Diary(
@@ -2169,8 +2749,8 @@ class AuthController:
                 exercise=exercise or 0,
                 type="blood_sugar",
                 recorded_at=recorded_datetime,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
+                created_at=datetime.now(TZ_TAIWAN),
+                updated_at=datetime.now(TZ_TAIWAN)
             )
             
             db.session.add(new_blood_sugar)
@@ -2178,7 +2758,8 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "Success",
+                "message_code": "SUCCESS",
                 "new_record_id": new_blood_sugar.id  # 回傳新記錄的 ID
             }, 200
         
@@ -2188,122 +2769,174 @@ class AuthController:
             print(traceback.format_exc())
             return {
                 "status": "1",
-                "message": "新增血糖記錄失敗"
+                "message": "Failed to add blood sugar record",
+                "message_code": "ADD_BLOOD_SUGAR_FAILED"
             }, 500
 
 
     @staticmethod
     def get_friend_results(email: str):
         """
-        取得好友邀請結果列表 - 修正閃退版本
+        取得好友邀請結果列表 - 優化記憶體版本
         """
+        print("Getting friend results...")
+        log_memory_usage("Start get_friend_results")
+        
+        # 確保在 Flask Application Context 中執行
+        from flask import has_app_context
+        if not has_app_context():
+            # 如果沒有 app context，嘗試創建一個
+            try:
+                from app import create_app
+                app = create_app()
+                with app.app_context():
+                    return AuthController.get_friend_results(email)
+            except Exception as context_error:
+                print(f"Failed to create app context: {context_error}")
+                return {
+                    "status": "1",
+                    "message": "System error: Unable to create application context",
+                    "message_code": "APP_CONTEXT_ERROR",
+                    "results": []
+                }, 500
+        
         try:
+            # 嚴格的輸入驗證
+            if not email or not isinstance(email, str):
+                return {
+                    "status": "1",
+                    "message": "Invalid email address",
+                    "message_code": "INVALID_EMAIL",
+                    "results": []
+                }, 400
+
             user = User.query.filter_by(email=email).first()
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在",
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND",
                     "results": []
                 }, 404
             
             print(f"Getting friend results for user: {user.id}")
             
-            # 使用簡單查詢，避免複雜的批次處理
-            friend_results = (FriendResult.query
-                            .filter_by(user_id=user.id)
-                            .order_by(FriendResult.created_at.desc())
-                            .limit(20)  # 限制數量
-                            .all())
+            # 安全的資料庫查詢
+            try:
+                # 進一步限制查詢數量，避免記憶體問題
+                friend_results = (FriendResult.query
+                                .filter_by(user_id=user.id)
+                                .order_by(FriendResult.created_at.desc())
+                                .limit(10)  # 減少到 10 筆
+                                .all())
+                                
+            except SQLAlchemyError as query_error:
+                print(f"Database query error in get_friend_results: {query_error}")
+                return {
+                    "status": "1",
+                    "message": "Database query error",
+                    "message_code": "DATABASE_QUERY_ERROR",
+                    "results": []
+                }, 500
             
             print(f"Found {len(friend_results)} friend results")
+            log_memory_usage("After query in get_friend_results")
             
-            # 預先載入所有需要的使用者資料，避免 N+1 查詢
-            relation_ids = [result.relation_id for result in friend_results if result.relation_id]
-            relation_users = {}
+            if not friend_results:
+                return {
+                    "status": "0",
+                    "message": "Success",
+                    "message_code": "SUCCESS",
+                    "results": []
+                }, 200
             
-            if relation_ids:
-                try:
-                    users_list = User.query.filter(User.id.in_(relation_ids)).all()
-                    relation_users = {u.id: u for u in users_list}
-                    print(f"Loaded {len(relation_users)} relation users")
-                except Exception as e:
-                    print(f"Error loading relation users: {e}")
-                    relation_users = {}
-            
-            # 簡化的資料處理
+            # 使用更簡化的資料處理
             results_list = []
             for result in friend_results:
                 try:
-                    # 從預載入的字典中獲取關聯使用者
-                    relation_user = relation_users.get(result.relation_id)
+                    # 確保每個欄位都有預設值
+                    result_id = getattr(result, 'id', 0)
+                    result_user_id = getattr(result, 'user_id', 0)
+                    result_relation_id = getattr(result, 'relation_id', 0)
+                    result_type = getattr(result, 'type', 0)
+                    result_status = getattr(result, 'status', 0)
+                    result_read = getattr(result, 'read', 0)
                     
-                    # 安全的資料轉換
-                    def safe_int(value, default=0):
+                    # 安全的時間格式化
+                    def safe_datetime_format(dt):
                         try:
-                            return int(value) if value is not None else default
-                        except:
-                            return default
-                    
-                    def safe_str(value, default=""):
-                        try:
-                            return str(value) if value is not None else default
-                        except:
-                            return default
-                    
-                    def safe_datetime(dt):
-                        try:
-                            return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else ""
-                        except:
+                            if dt and hasattr(dt, 'strftime'):
+                                return dt.strftime("%Y-%m-%d %H:%M:%S")
+                            return ""
+                        except Exception:
                             return ""
                     
-                    # 構建 relation 物件
-                    relation_obj = {
-                        "id": safe_int(result.relation_id),
-                        "name": safe_str(relation_user.name if relation_user else None),
-                        "account": safe_str(relation_user.account if relation_user else "")
-                    }
-                    
-                    # 構建結果物件 - 只包含必要欄位
+                    # 最簡化的資料結構
                     result_data = {
-                        "id": safe_int(result.id),
-                        "user_id": safe_int(result.user_id),
-                        "relation_id": safe_int(result.relation_id),
-                        "type": safe_int(result.type),
-                        "status": safe_int(result.status),
-                        "read": safe_int(result.read),
-                        "created_at": safe_datetime(result.created_at),
-                        "updated_at": safe_datetime(result.updated_at),
-                        "relation": relation_obj
+                        "id": int(result_id) if result_id is not None else 0,
+                        "user_id": int(result_user_id) if result_user_id is not None else 0,
+                        "relation_id": int(result_relation_id) if result_relation_id is not None else 0,
+                        "type": int(result_type) if result_type is not None else 0,
+                        "status": int(result_status) if result_status is not None else 0,
+                        "read": int(result_read) if result_read is not None else 0,
+                        "created_at": safe_datetime_format(getattr(result, 'created_at', None)),
+                        "updated_at": safe_datetime_format(getattr(result, 'updated_at', None)),
+                        "relation": {
+                            "id": int(result_relation_id) if result_relation_id is not None else 0,
+                            "name": "",  # 暫時簡化，避免額外查詢
+                            "account": ""
+                        }
                     }
                     
                     results_list.append(result_data)
+                    
+                    # 立即清理單筆記錄
+                    result = None
                             
                 except Exception as e:
-                    print(f"Error processing friend result {result.id}: {e}")
+                    print(f"Error processing friend result {getattr(result, 'id', 'unknown')}: {e}")
+                    # 繼續處理其他記錄，不因單筆錯誤而中斷
                     continue
             
             print(f"Successfully processed {len(results_list)} friend results")
+            log_memory_usage("End get_friend_results")
             
-            # 簡化回傳資料
-            response_data = {
+            return {
                 "status": "0",
-                "message": "成功",
+                "message": "success",
+                "message_code": "SUCCESS",
                 "results": results_list
-            }
-            
-            return response_data, 200
+            }, 200
             
         except Exception as e:
             print(f"Critical error in get_friend_results: {str(e)}")
             print(traceback.format_exc())
+            log_memory_usage("Error in get_friend_results")
             return {
                 "status": "1",
-                "message": "系統錯誤",
+                "message": "system error",
+                "message_code": "SYSTEM_ERROR",
                 "results": []
             }, 500
-
-
-
+        finally:
+            # 強制記憶體清理
+            try:
+                import gc
+                # 清理局部變數
+                locals_to_clear = ['user', 'friend_results', 'results_list', 'result']
+                for var_name in locals_to_clear:
+                    if var_name in locals():
+                        locals()[var_name] = None
+                
+                # 強制垃圾回收
+                collected = gc.collect()
+                print(f"GC collected {collected} objects in get_friend_results cleanup")
+                
+                # 記錄清理後的記憶體狀況
+                log_memory_usage("After get_friend_results cleanup")
+                
+            except Exception as cleanup_error:
+                print(f"Cleanup error in get_friend_results: {cleanup_error}")
 
     @staticmethod
     def get_friend_requests(email: str):
@@ -2311,7 +2944,8 @@ class AuthController:
         try:
             user = User.query.filter_by(email=email).first()
             if not user:
-                return {"status": "1", "message": "使用者不存在"}, 404
+                return {"status": "1", "message": "User not found",
+                "message_code": "USER_NOT_FOUND"}, 404
 
             friend_requests = (
                 FriendResult.query
@@ -2320,19 +2954,17 @@ class AuthController:
                 .all()
             )
 
-            try:
-                from datetime import UTC as _UTC
-                TZ = _UTC
-            except Exception:
-                from datetime import timezone
-                TZ = timezone.utc
-
+            # 修正時區處理
             def safe_strftime(dt, fmt="%Y-%m-%d %H:%M:%S"):
                 if not isinstance(dt, datetime):
                     return ""
-                if dt.tzinfo is not None:
-                    return dt.astimezone(TZ).strftime(fmt)
-                return dt.strftime(fmt)
+                try:
+                    # 使用台灣時區
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=TZ_TAIWAN)
+                    return dt.strftime(fmt)
+                except:
+                    return ""
 
             requests_list = []
             for req in friend_requests:
@@ -2341,8 +2973,8 @@ class AuthController:
                 # 確保字串，不回傳 null
                 user_info = {
                     "id": req.user_id,
-                    "name": (getattr(from_user, "name", "") or ""),
-                    "account": (getattr(from_user, "account", "") or "")
+                    "name": (getattr(from_user, "name", "") or "") if from_user else "",
+                    "account": (getattr(from_user, "account", "") or "") if from_user else ""
                 }
 
                 requests_list.append({
@@ -2350,7 +2982,6 @@ class AuthController:
                     "user_id": req.user_id,
                     "relation_id": req.relation_id,
                     "type": int(getattr(req, "type", 0) or 0),
-                    # 內層 status 仍保留（避免動到前端），確保是整數
                     "status": int(getattr(req, "status", 0) or 0),
                     "read": int(getattr(req, "read", 0) or 0),
                     "created_at": safe_strftime(getattr(req, "created_at", None)),
@@ -2358,11 +2989,76 @@ class AuthController:
                     "user": user_info
                 })
 
-            return {"status": "0", "message": "成功", "requests": requests_list}, 200
+            return {"status": "0", "message": "Success",
+            "message_code": "SUCCESS", "requests": requests_list}, 200
 
         except Exception as e:
             print(f"Get friend requests error: {str(e)}")
-            return {"status": "1", "message": "取得邀請列表失敗"}, 500
+            print(traceback.format_exc())
+            return {"status": "1", "message": "Failed to get invitation list",
+            "message_code": "GET_INVITATIONS_FAILED"}, 500
+
+    # @staticmethod
+    # def get_friend_requests(email: str):
+    #     print("Getting friend requests...")
+    #     try:
+    #         user = User.query.filter_by(email=email).first()
+    #         if not user:
+    #             return {"status": "1", "message": "User not found",
+    #                     "message_code": "USER_NOT_FOUND"}, 404
+
+    #         friend_requests = (
+    #             FriendResult.query
+    #             .filter_by(relation_id=user.id, status=0)
+    #             .order_by(FriendResult.created_at.desc())
+    #             .all()
+    #         )
+
+    #         try:
+    #             from datetime import UTC as _UTC
+    #             TZ = _UTC
+    #         except Exception:
+    #             from datetime import timezone
+    #             TZ = timezone.utc
+
+    #         def safe_strftime(dt, fmt="%Y-%m-%d %H:%M:%S"):
+    #             if not isinstance(dt, datetime):
+    #                 return ""
+    #             if dt.tzinfo is not None:
+    #                 return dt.astimezone(TZ).strftime(fmt)
+    #             return dt.strftime(fmt)
+
+    #         requests_list = []
+    #         for req in friend_requests:
+    #             from_user = User.query.filter_by(id=req.user_id).first()
+
+    #             # 確保字串，不回傳 null
+    #             user_info = {
+    #                 "id": req.user_id,
+    #                 "name": (getattr(from_user, "name", "") or ""),
+    #                 "account": (getattr(from_user, "account", "") or "")
+    #             }
+
+    #             requests_list.append({
+    #                 "id": req.id,
+    #                 "user_id": req.user_id,
+    #                 "relation_id": req.relation_id,
+    #                 "type": int(getattr(req, "type", 0) or 0),
+    #                 # 內層 status 仍保留（避免動到前端），確保是整數
+    #                 "status": int(getattr(req, "status", 0) or 0),
+    #                 "read": int(getattr(req, "read", 0) or 0),
+    #                 "created_at": safe_strftime(getattr(req, "created_at", None)),
+    #                 "updated_at": safe_strftime(getattr(req, "updated_at", None)),
+    #                 "user": user_info
+    #             })
+
+    #         return {"status": "0", "message": "Success",
+    #                 "message_code": "SUCCESS", "requests": requests_list}, 200
+
+    #     except Exception as e:
+    #         print(f"Get friend requests error: {str(e)}")
+    #         return {"status": "1", "message": "Failed to get invitation list",
+    #                     "message_code": "GET_INVITATIONS_FAILED"}, 500
 
         
 
@@ -2374,7 +3070,8 @@ class AuthController:
         if not user:
             return {
                 "status": "1",
-                "message": "使用者不存在"
+                "message": "User not found",
+                "message_code": "USER_NOT_FOUND"
             }, 404
 
         # 參數型態安全轉換
@@ -2384,7 +3081,8 @@ class AuthController:
                 if height <= 0 or height > 300:
                     return {
                         "status": "1",
-                        "message": "height 參數無效"
+                        "message": "Invalid height parameter",
+                        "message_code": "INVALID_HEIGHT"
                     }, 400
             else:
                 height = 170.0  # 預設值，可依需求調整
@@ -2394,12 +3092,14 @@ class AuthController:
                 if weight <= 0 or weight > 500:
                     return {
                         "status": "1",
-                        "message": "weight 參數無效"
+                        "message": "Invalid weight parameter",
+                        "message_code": "INVALID_WEIGHT"
                     }, 400
             else:
                 return {
                     "status": "1",
-                    "message": "weight 參數不能為空"
+                    "message": "Weight parameter cannot be empty",
+                    "message_code": "WEIGHT_REQUIRED"
                 }, 400
 
             if bmi is not None:
@@ -2407,7 +3107,8 @@ class AuthController:
                 if bmi <= 0 or bmi > 100:
                     return {
                         "status": "1",
-                        "message": "bmi 參數無效"
+                        "message": "Invalid BMI parameter",
+                        "message_code": "INVALID_BMI"
                     }, 400
             else:
                 bmi = round(weight / ((height / 100) ** 2), 2)
@@ -2417,7 +3118,8 @@ class AuthController:
                 if body_fat < 0 or body_fat > 100:
                     return {
                         "status": "1",
-                        "message": "body_fat 參數無效"
+                        "message": "Invalid body fat parameter",
+                        "message_code": "INVALID_BODY_FAT"
                     }, 400
             else:
                 body_fat = 0.0
@@ -2425,17 +3127,18 @@ class AuthController:
         except (ValueError, TypeError):
             return {
                 "status": "1",
-                "message": "參數型態錯誤"
+                "message": "Parameter type error",
+                "message_code": "PARAMETER_TYPE_ERROR"
             }, 400
         
         if recorded_at:
             try:
                 recorded_datetime = datetime.strptime(recorded_at, "%Y-%m-%d %H:%M:%S")
-                recorded_datetime = recorded_datetime.replace(tzinfo=timezone.utc)
+                recorded_datetime = recorded_datetime.replace(tzinfo=TZ_TAIWAN)
             except Exception:
-                recorded_datetime = datetime.now(timezone.utc)
+                recorded_datetime = datetime.now(TZ_TAIWAN)
         else:
-            recorded_datetime = datetime.now(timezone.utc)
+            recorded_datetime = datetime.now(TZ_TAIWAN)
         
 
         # 新增體重記錄到 Diary
@@ -2447,14 +3150,15 @@ class AuthController:
                 bmi=bmi,
                 type="weight",
                 recorded_at=recorded_datetime,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
+                created_at=datetime.now(TZ_TAIWAN),
+                updated_at=datetime.now(TZ_TAIWAN)
             )
             db.session.add(new_diary)
             db.session.commit()
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "Success",
+                "message_code": "SUCCESS",
                 "new_record_id": new_diary.id
             }, 200
         except Exception as e:
@@ -2462,7 +3166,8 @@ class AuthController:
             db.session.rollback()
             return {
                 "status": "1",
-                "message": "新增體重失敗"
+                "message": "Failed to add weight record",
+                "message_code": "ADD_WEIGHT_FAILED"
             }, 500
         
 
@@ -2476,7 +3181,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
             # 支援前端傳 dict 格式（如 {"blood_sugars": [23], "weights": [29]}）
@@ -2493,7 +3199,8 @@ class AuthController:
             if not isinstance(delete_ids, list) or not all(str(i).isdigit() for i in delete_ids):
                 return {
                     "status": "1",
-                    "message": "deleteObject 必須為 ID 數字陣列"
+                    "message": "deleteObject must be an array of ID numbers",
+                    "message_code": "DELETE_OBJECT_MUST_BE_ID_ARRAY"
                 }, 400
 
             # 轉成 int
@@ -2504,7 +3211,8 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功"
+                "message": "Success",
+                "message_code": "SUCCESS"
             }, 200
 
         except Exception as e:
@@ -2512,7 +3220,8 @@ class AuthController:
             print(f"Delete user records error: {str(e)}")
             return {
                 "status": "1",
-                "message": "刪除健康記錄失敗"
+                "message": "Failed to delete health records",
+                "message_code": "DELETE_HEALTH_RECORDS_FAILED"
             }, 500
         
 
@@ -2524,18 +3233,19 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
             # 處理時間
             if recorded_at:
                 try:
                     recorded_datetime = datetime.strptime(recorded_at, "%Y-%m-%d %H:%M:%S")
-                    recorded_datetime = recorded_datetime.replace(tzinfo=timezone.utc)
+                    recorded_datetime = recorded_datetime.replace(tzinfo=TZ_TAIWAN)  # 修正
                 except Exception:
-                    recorded_datetime = datetime.now(timezone.utc)
+                    recorded_datetime = datetime.now(TZ_TAIWAN)  # 修正
             else:
-                recorded_datetime = datetime.now(timezone.utc)
+                recorded_datetime = datetime.now(TZ_TAIWAN)  # 修正
 
             # tag 轉成 json 字串
             tag_json = json.dumps(tag, ensure_ascii=False) if isinstance(tag, list) else json.dumps([str(tag)], ensure_ascii=False)
@@ -2553,8 +3263,8 @@ class AuthController:
                 location=location_json,
                 recorded_at=recorded_datetime,
                 type="diet",
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
+                created_at=datetime.now(TZ_TAIWAN),
+                updated_at=datetime.now(TZ_TAIWAN)
             )
             db.session.add(new_diary)
             db.session.commit()
@@ -2562,7 +3272,8 @@ class AuthController:
             # 假設 image_url 由前端或其他服務產生，這裡先回傳空字串
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "Success",
+                "message_code": "SUCCESS",
                 "image_url": ""
             }, 201
 
@@ -2571,7 +3282,8 @@ class AuthController:
             print(f"Add diet record error: {str(e)}")
             return {
                 "status": "1",
-                "message": "新增飲食記錄失敗"
+                "message": "Failed to add diet record",
+                "message_code": "ADD_DIET_FAILED"
             }, 500
         
 
@@ -2583,14 +3295,16 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
             # 重新啟用參數驗證 - 這是關鍵修正
             if systolic is None or diastolic is None or pulse is None:
                 return {
                     "status": "1",
-                    "message": "血壓或心跳參數不能為空"
+                    "message": "Blood pressure or heart rate parameters cannot be empty",
+                    "message_code": "BP_HR_REQUIRED"
                 }, 400
 
             # 安全的型態轉換，支援字串和數字
@@ -2601,25 +3315,27 @@ class AuthController:
             except (ValueError, TypeError):
                 return {
                     "status": "1",
-                    "message": "血壓或心跳必須為數字"
+                    "message": "Blood pressure and heart rate must be numbers",
+                    "message_code": "BP_HR_MUST_BE_NUMBER"
                 }, 400
 
             # 現在可以安全地進行數值比較
             if systolic <= 0 or diastolic <= 0 or pulse <= 0:
                 return {
                     "status": "1",
-                    "message": "血壓或心跳值無效"
+                    "message": "Invalid blood pressure or heart rate values",
+                    "message_code": "INVALID_BP_HR"
                 }, 400
 
             # 處理記錄時間
             if recorded_at:
                 try:
                     recorded_datetime = datetime.strptime(recorded_at, "%Y-%m-%d %H:%M:%S")
-                    recorded_datetime = recorded_datetime.replace(tzinfo=timezone.utc)
+                    recorded_datetime = recorded_datetime.replace(tzinfo=TZ_TAIWAN)
                 except Exception:
-                    recorded_datetime = datetime.now(timezone.utc)
+                    recorded_datetime = datetime.now(TZ_TAIWAN)
             else:
-                recorded_datetime = datetime.now(timezone.utc)
+                recorded_datetime = datetime.now(TZ_TAIWAN)
 
             # 新增血壓記錄
             new_pressure = Diary(
@@ -2629,15 +3345,16 @@ class AuthController:
                 pulse=pulse,
                 type="blood_pressure",
                 recorded_at=recorded_datetime,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
+                created_at=datetime.now(TZ_TAIWAN),
+                updated_at=datetime.now(TZ_TAIWAN)
             )
             db.session.add(new_pressure)
             db.session.commit()
 
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "Success",
+                "message_code": "SUCCESS",
                 "records": "成功"
             }, 201
 
@@ -2647,7 +3364,8 @@ class AuthController:
             print(traceback.format_exc())
             return {
                 "status": "1",
-                "message": "新增血壓記錄失敗",
+                "message": "Failed to add blood pressure record",
+                "message_code": "ADD_BLOOD_PRESSURE_FAILED",
                 "records": "失敗"
             }, 500
         
@@ -2655,228 +3373,713 @@ class AuthController:
 
     @staticmethod
     def get_friend_invite_code(email: str):
+        print("Getting friend invite code...")
+        log_memory_usage("Start get_friend_invite_code")
+        
+        # 確保在 Flask Application Context 中執行
+        from flask import has_app_context
+        if not has_app_context():
+            try:
+                from app import create_app
+                app = create_app()
+                with app.app_context():
+                    return AuthController.get_friend_invite_code(email)
+            except Exception as context_error:
+                print(f"Failed to create app context: {context_error}")
+                return {
+                    "status": "1",
+                    "message": "System error: Unable to create application context",
+                    "message_code": "APP_CONTEXT_ERROR"
+                }, 500
+        
         try:
             user = User.query.filter_by(email=email).first()
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
-            # 生成基於 user_id 的固定格式邀請碼
-            # 格式：用戶ID(4位) + 隨機數(4位)
-            user_id_str = f"{user.id:04d}"  # 補零到4位數
-            random_suffix = f"{random.randint(1000, 9999)}"
-            invite_code = user_id_str + random_suffix
+            # 檢查 User 表是否已有邀請碼
+            if hasattr(user, 'invite_code') and user.invite_code:
+                # 如果已經有邀請碼，直接返回
+                log_memory_usage("Return existing invite code")
+                return {
+                    "status": "0",
+                    "message": "Success",
+                    "message_code": "SUCCESS",
+                    "invite_code": user.invite_code
+                }, 200
+
+            # 生成固定的邀請碼（基於 user_id 的數學運算）
+            user_id_str = f"{user.id:04d}"
+            suffix = (user.id * 7 + 1000) % 9000 + 1000
+            invite_code = user_id_str + f"{suffix:04d}"
             
+            print(f"Generated fixed invite code for user {user.id}: {invite_code}")
+            log_memory_usage("Generated invite code")
+
+            # 更安全的資料庫操作
+            try:
+                # 檢查是否需要更新資料庫
+                if hasattr(user, 'invite_code'):
+                    if user.invite_code != invite_code:
+                        user.invite_code = invite_code
+                        # 移除對 updated_at 的引用，因為 User 模型中可能沒有這個欄位
+                        
+                        # 使用較安全的提交方式
+                        db.session.flush()  # 先 flush，檢查是否有錯誤
+                        db.session.commit()
+                        log_memory_usage("After commit invite code")
+                        print(f"Successfully updated invite_code for user {user.id}")
+                    else:
+                        print(f"Invite code already up to date for user {user.id}")
+                else:
+                    print(f"User model doesn't have invite_code field, returning generated code")
+                    
+            except SQLAlchemyError as db_error:
+                print(f"Database operation failed: {db_error}")
+                db.session.rollback()
+                # 即使資料庫更新失敗，仍然返回生成的邀請碼
+                print("Continuing with generated invite code despite DB error")
+            except Exception as unexpected_error:
+                print(f"Unexpected database error: {unexpected_error}")
+                try:
+                    db.session.rollback()
+                except:
+                    pass
+                print("Continuing with generated invite code despite unexpected error")
+            
+            log_memory_usage("End get_friend_invite_code")
             return {
                 "status": "0",
-                "message": "成功",
+                "message": "success",
+                "message_code": "INVITE_CODE_SUCCESS",
                 "invite_code": invite_code
             }, 200
 
         except Exception as e:
+            try:
+                db.session.rollback()
+            except:
+                pass  # 如果 rollback 也失敗，忽略錯誤
             print(f"Get friend invite code error: {str(e)}")
+            print(traceback.format_exc())
+            log_memory_usage("Error in get_friend_invite_code")
             return {
                 "status": "1",
-                "message": "取得邀請碼失敗"
+                "message": "failed to get invite code",
+                "message_code": "INVITE_CODE_ERROR"
             }, 500
-
+        finally:
+            # 強制記憶體清理
+            try:
+                import gc
+                # 清理局部變數
+                locals_to_clear = ['user', 'invite_code', 'user_id_str', 'suffix']
+                for var_name in locals_to_clear:
+                    if var_name in locals():
+                        locals()[var_name] = None
+                
+                # 強制垃圾回收
+                collected = gc.collect()
+                print(f"GC collected {collected} objects in get_friend_invite_code cleanup")
+                
+                # 記錄清理後的記憶體狀況
+                log_memory_usage("After get_friend_invite_code cleanup")
+                
+            except Exception as cleanup_error:
+                print(f"Cleanup error in get_friend_invite_code: {cleanup_error}")
+        
     @staticmethod
-    def send_friend_invite(email, invite_code, relation_type):
+    def send_friend_invite(email: str, invite_code: str, relation_type: int):
+        """
+        發送好友邀請 - 修正版本（基於現有 Friend 模型）
+        """
+        # 記錄開始時的記憶體狀況
+        log_memory_usage("Start send_friend_invite")
+        
+        # 確保在 Flask Application Context 中執行
+        from flask import has_app_context
+        if not has_app_context():
+            try:
+                from app import create_app
+                app = create_app()
+                with app.app_context():
+                    return AuthController.send_friend_invite(email, invite_code, relation_type)
+            except Exception as context_error:
+                print(f"Failed to create app context: {context_error}")
+                return {
+                    "status": "1",
+                    "message": "System error: Unable to create application context",
+                    "message_code": "APP_CONTEXT_ERROR"
+                }, 500
+        
         try:
-        # 查詢發送邀請的使用者
-            user = User.query.filter_by(email=email).first()
-            if not user:
+            # === 嚴格的參數驗證 ===
+            # 檢查 email 參數
+            if not email or not isinstance(email, str):
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
-                }, 404
-
-            # 驗證參數
-            if not invite_code or not invite_code.strip():
-                return {
-                    "status": "1",
-                    "message": "邀請碼不能為空"
+                    "message": "invalid email address",
+                    "message_code": "INVALID_EMAIL"
                 }, 400
-
-            # 驗證 relation_type
+            
+            # 檢查邀請碼格式
+            if not invite_code:
+                return {
+                    "status": "1",
+                    "message": "invite code cannot be empty",
+                    "message_code": "INVITE_CODE_EMPTY"
+                }, 400
+            
+            invite_code = str(invite_code).strip()
+            if len(invite_code) != 8:
+                print(f"Invalid invite code format: {invite_code}")
+                return {
+                    "status": "1",
+                    "message": "invalid invite code format",
+                    "message_code": "INVITE_CODE_FORMAT_ERROR"
+                }, 404
+            
+            if not invite_code.isdigit():
+                print(f"Invalid invite code format: {invite_code}")
+                return {
+                    "status": "1",
+                    "message": "invalid invite code format",
+                    "message_code": "INVITE_CODE_FORMAT_ERROR"
+                }, 404
+            
+            # 檢查關係類型
             try:
                 relation_type = int(relation_type)
-                if relation_type not in [0, 1, 2]:
+                if relation_type not in [0, 1, 2]:  # 0:醫師團, 1:親友團, 2:控糖團
                     return {
                         "status": "1",
-                        "message": "relation_type 參數無效"
+                        "message": "invalid relation type",
+                        "message_code": "INVALID_RELATION_TYPE"
                     }, 400
             except (ValueError, TypeError):
                 return {
                     "status": "1",
-                    "message": "relation_type 必須為整數"
+                    "message": "relation type must be a number",
+                    "message_code": "RELATION_TYPE_MUST_BE_NUMBER"
                 }, 400
-
-            # 檢查邀請碼是否有效（透過邀請碼找到目標使用者）
-            target_user = AuthController.find_user_by_invite_code(invite_code)
-            if not target_user:
+            
+            # 查詢發送邀請的使用者
+            user = User.query.filter_by(email=email).first()
+            if not user:
                 return {
                     "status": "1",
-                    "message": "邀請碼無效"
-                }, 400
+                    "message": "user not found",
+                    "message_code": "USER_NOT_FOUND"
+                }, 404
 
-            # 檢查是否是自己邀請自己
-            # if target_user.id == user.id:
-            #     return {
-            #         "status": "1",
-            #         "message": "不能邀請自己"
-            #     }, 400
+            print(f"Sender user: {user.id}, email: {email}")
+
+            # 查詢被邀請的使用者
+            invited_user = AuthController.find_user_by_invite_code(invite_code)
+            if not invited_user:
+                return {
+                    "status": "1",
+                    "message": "Please enter a valid friend invite code",
+                    "message_code": "INVALID_FRIEND_INVITE_CODE",
+                    "message_code": "INVALID_INVITE_CODE"
+                }, 404
+
+            print(f"Invited user: {invited_user.id}, invite_code: {invite_code}")
+            print(f"Input invite_code: {invite_code}, Found user_id: {invited_user.id}")
+
+            # 檢查是否邀請自己
+            if user.id == invited_user.id:
+                print(f"❌ Cannot invite self: sender={user.id}, invited={invited_user.id}")
+                return {
+                    "status": "1",
+                    "message": "Cannot invite yourself",
+                    "message_code": "CANNOT_INVITE_SELF",
+                    "message_code": "CANNOT_INVITE_SELF"
+                }, 400
+            else:
+                print(f"✅ Valid invitation: sender={user.id}, invited={invited_user.id}")
+
+            # 檢查是否已經有邀請記錄
+            print(f"Checking existing invites for sender={user.id}, invited={invited_user.id}, type={relation_type}")
+            existing_invite = FriendResult.query.filter_by(
+                user_id=user.id,
+                relation_id=invited_user.id,  # 直接使用 invited_user.id
+                type=relation_type,
+                status=0  # 待處理
+            ).first()
+
+            if existing_invite:
+                print(f"❌ Existing invite found: {existing_invite.id}")
+                return {
+                    "status": "1", 
+                    "message": "已經發送過邀請",
+                    "message_code": "INVITATION_ALREADY_SENT"
+                }, 400
+            else:
+                print(f"✅ No existing invite found")
 
             # 檢查是否已經是好友
-            if AuthController.is_already_friend(user.id, target_user.id, relation_type):
+            print(f"Checking if already friends: sender={user.id}, invited={invited_user.id}, type={relation_type}")
+            is_friend = AuthController.is_already_friend(user.id, invited_user.id, relation_type)
+            if is_friend:
+                print(f"❌ Already friends detected")
                 return {
-                    "status": "2",
-                    "message": "已經成為好友"
+                    "status": "1",
+                    "message": "Already friends",
+                    "message_code": "ALREADY_FRIENDS",
+                    "message_code": "ALREADY_FRIENDS"
+                }, 400
+            else:
+                print(f"✅ Not friends yet, proceeding with invitation")
+
+            # 安全的資料庫操作
+            try:
+                print(f"Creating friend invite record...")
+                # 直接在 FriendResult 表中建立邀請記錄
+                friend_result = FriendResult(
+                    user_id=user.id,                # 邀請者
+                    relation_id=invited_user.id,    # 被邀請者（直接使用使用者 ID）
+                    type=relation_type,
+                    invite_code=invite_code,
+                    status=0,  # 待處理
+                    read=0,
+                    created_at=datetime.now(TZ_TAIWAN),
+                    updated_at=datetime.now(TZ_TAIWAN)
+                )
+
+                print(f"Adding friend_result to session...")
+                db.session.add(friend_result)
+                
+                print(f"Flushing session...")
+                db.session.flush()  # 先 flush 檢查是否有錯誤
+                
+                print(f"Committing transaction...")
+                db.session.commit()
+
+                print(f"✅ Friend invite sent successfully: user={user.id}, invited_user={invited_user.id}, type={relation_type}")
+                log_memory_usage("After db commit in send_friend_invite")
+
+                return {
+                    "status": "0",
+                    "message": "friend invitation sent successfully",
+                    "message_code": "SUCCESS"
                 }, 200
-
-            # 建立好友邀請記錄
-            friend_result = FriendResult(
-                user_id=user.id,
-                relation_id=target_user.id,
-                invite_code=invite_code,
-                type=relation_type,
-                status=0,  # 0: 待處理, 1: 接受, 2: 拒絕
-                read=0,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
-            )
-            db.session.add(friend_result)
-            db.session.commit()
-
-            return {
-                "status": "0",
-                "message": "邀請已發送"
-            }, 200
+                
+            except SQLAlchemyError as db_error:
+                db.session.rollback()
+                print(f"❌ Database error in send_friend_invite: {db_error}")
+                return {
+                    "status": "1",
+                    "message": "database error, invitation sending failed",
+                    "message_code": "DB_ERROR"
+                }, 500
+            except Exception as inner_error:
+                db.session.rollback()
+                print(f"❌ Unexpected error in friend invite creation: {inner_error}")
+                print(traceback.format_exc())
+                return {
+                    "status": "1",
+                    "message": "invitation creation failed",
+                    "message_code": "CREATION_FAILED"
+                }, 500
 
         except Exception as e:
-            db.session.rollback()
+            # 確保資料庫回滾
+            try:
+                db.session.rollback()
+            except:
+                pass  # 如果 rollback 也失敗，忽略錯誤
+                
             print(f"Send friend invite error: {str(e)}")
+            print(traceback.format_exc())
+            log_memory_usage("Error in send_friend_invite")
             return {
                 "status": "1",
-                "message": "發送邀請失敗"
+                "message": "Failed to send invitation",
+                "message_code": "SEND_INVITATION_FAILED"
             }, 500
+        finally:
+            # 強制記憶體清理
+            try:
+                import gc
+                # 清理局部變數
+                locals_to_clear = ['user', 'invited_user', 'existing_invite', 'friend_result']
+                for var_name in locals_to_clear:
+                    if var_name in locals():
+                        locals()[var_name] = None
+                
+                # 強制垃圾回收
+                collected = gc.collect()
+                print(f"GC collected {collected} objects in send_friend_invite cleanup")
+                
+                # 記錄清理後的記憶體狀況
+                log_memory_usage("After send_friend_invite cleanup")
+                
+            except Exception as cleanup_error:
+                print(f"Cleanup error in send_friend_invite: {cleanup_error}")
+
+    # @staticmethod
+    # def send_friend_invite(email, invite_code, relation_type):
+    #     try:
+    #         invite_code_str = str(invite_code).strip()
+            
+    #         # 查詢發送邀請的使用者
+    #         user = User.query.filter_by(email=email).first()
+    #         if not user:
+    #             return {
+    #                 "status": "1",
+    #                 "message": "User not found",
+    #                     "message_code": "USER_NOT_FOUND"
+    #             }, 404
+
+    #         # 驗證參數
+    #         if not invite_code_str:
+    #             return {
+    #                 "status": "1",
+    #                 "message": "Invite code cannot be empty",
+    #                     "message_code": "INVITE_CODE_REQUIRED"
+    #             }, 400
+
+    #         # 檢查邀請碼是否有效（透過邀請碼找到目標使用者）
+    #         target_user = AuthController.find_user_by_invite_code(invite_code_str)
+    #         if not target_user:
+    #             return {
+    #                 "status": "1",
+    #                 "message": "Invalid invite code",
+    #                     "message_code": "INVALID_INVITE_CODE"
+    #             }, 400
+
+    #         # 檢查是否自己邀請自己
+    #         if target_user.id == user.id:
+    #             return {
+    #                 "status": "1",
+    #                 "message": "Cannot invite yourself",
+    #                     "message_code": "CANNOT_INVITE_SELF"
+    #             }, 400
+
+    #         # 檢查是否已經發送過邀請
+    #         existing_invite = FriendResult.query.filter_by(
+    #             user_id=user.id,
+    #             relation_id=target_user.id,
+    #             type=relation_type,
+    #             status=0  # 待處理狀態
+    #         ).first()
+
+    #         if existing_invite:
+    #             return {
+    #                 "status": "1",
+    #                 "message": "Invitation already sent, please wait for response",
+    #                     "message_code": "INVITATION_PENDING"
+    #             }, 400
+
+    #         # 建立實際的好友邀請記錄（注意：這與邀請碼存儲記錄不同）
+    #         friend_result = FriendResult(
+    #             user_id=user.id,           # 邀請者
+    #             relation_id=target_user.id, # 被邀請者
+    #             invite_code=invite_code_str, # 使用的邀請碼
+    #             type=relation_type,        # 邀請類型
+    #             status=0,                  # 0: 待處理, 1: 接受, 2: 拒絕
+    #             read=0,
+    #             created_at=datetime.now(TZ_TAIWAN),
+    #             updated_at=datetime.now(TZ_TAIWAN)
+    #         )
+    #         db.session.add(friend_result)
+    #         db.session.commit()
+
+    #         print(f"Created friend invite record: user {user.id} -> user {target_user.id}, type {relation_type}")
+
+    #         return {
+    #             "status": "0",
+    #             "message": "Invitation sent",
+    #                     "message_code": "INVITATION_SENT"
+    #         }, 200
+
+    #     except Exception as e:
+    #         db.session.rollback()
+    #         print(f"Send friend invite error: {str(e)}")
+    #         print(traceback.format_exc())
+    #         return {
+    #             "status": "1",
+    #             "message": "Failed to send invitation",
+    #                     "message_code": "SEND_INVITATION_FAILED"
+    #         }, 500
 
     @staticmethod
     def find_user_by_invite_code(invite_code):
         """
         根據邀請碼找到對應的使用者
-        邀請碼格式：前4位是 user_id，後4位是隨機數
+        直接從 User 表中查詢
         """
         try:
-            if not invite_code or len(invite_code) != 8:
+            # 嚴格的參數檢查
+            if not invite_code:
+                print("Invite code is empty")
+                return None
+                
+            invite_code_str = str(invite_code).strip()
+            
+            # 檢查邀請碼格式
+            if len(invite_code_str) != 8:
+                print(f"Invalid invite code format: {invite_code_str} (length: {len(invite_code_str)})")
+                return None
+                
+            if not invite_code_str.isdigit():
+                print(f"Invalid invite code format: {invite_code_str} (not all digits)")
                 return None
             
-            # 解析邀請碼前4位作為 user_id
+            print(f"Looking for user with invite code: {invite_code_str}")
+            
+            # 方法1：如果 User 表有 invite_code 欄位，直接查詢
             try:
-                user_id = int(invite_code[:4])
-                return User.query.filter_by(id=user_id).first()
-            except (ValueError, TypeError):
-                return None
+                if hasattr(User, 'invite_code'):
+                    user = User.query.filter_by(invite_code=invite_code_str).first()
+                    if user:
+                        print(f"Found user {user.id} via User table")
+                        return user
+            except Exception as db_error:
+                print(f"Database query error in method 1: {db_error}")
+            
+            # 方法2：解析邀請碼前4位作為 user_id（備用方法）
+            try:
+                user_id_str = invite_code_str[:4]
+                user_id = int(user_id_str)
+                
+                if user_id <= 0:
+                    print(f"Invalid user_id extracted from invite code: {user_id}")
+                    return None
+                
+                user = User.query.filter_by(id=user_id).first()
+                if user:
+                    # 驗證邀請碼是否正確（使用相同的生成邏輯）
+                    try:
+                        suffix = (user.id * 7 + 1000) % 9000 + 1000
+                        expected_code = f"{user.id:04d}{suffix:04d}"
+                        
+                        if invite_code_str == expected_code:
+                            print(f"Found user {user.id} via code parsing")
+                            return user
+                        else:
+                            print(f"Code mismatch: expected {expected_code}, got {invite_code_str}")
+                    except Exception as calc_error:
+                        print(f"Error calculating expected code: {calc_error}")
+                else:
+                    print(f"No user found with ID: {user_id}")
+                
+            except (ValueError, TypeError) as parse_error:
+                print(f"Error parsing user_id from invite code: {parse_error}")
+                
+            print(f"No user found for invite code: {invite_code_str}")
+            return None
             
         except Exception as e:
-            print(f"Find user by invite code error: {str(e)}")
+            print(f"Critical error in find_user_by_invite_code: {str(e)}")
+            print(traceback.format_exc())
             return None
 
     @staticmethod
     def is_already_friend(user_id, target_user_id, relation_type):
         """
         檢查兩個使用者是否已經是指定類型的好友
+        應該檢查 FriendResult 表中是否有已接受的邀請
         """
         try:
-            # 檢查雙向好友關係
-            existing_friend = Friend.query.filter(
+            # 檢查雙向的已接受邀請
+            existing_friendship = FriendResult.query.filter(
                 db.or_(
-                    db.and_(Friend.user_id == user_id, Friend.relation_type == relation_type),
-                    db.and_(Friend.user_id == target_user_id, Friend.relation_type == relation_type)
+                    db.and_(
+                        FriendResult.user_id == user_id,
+                        FriendResult.relation_id == target_user_id,
+                        FriendResult.type == relation_type,
+                        FriendResult.status == 1  # 已接受
+                    ),
+                    db.and_(
+                        FriendResult.user_id == target_user_id,
+                        FriendResult.relation_id == user_id,
+                        FriendResult.type == relation_type,
+                        FriendResult.status == 1  # 已接受
+                    )
                 )
             ).first()
             
-            return existing_friend is not None
+            return existing_friendship is not None
             
         except Exception as e:
             print(f"Is already friend error: {str(e)}")
             return False
 
+    # @staticmethod
+    # def accept_friend_invite(email: str, invite_code: int):
+    #     """
+    #     接受控糖團邀請
+    #     """
+    #     try:
+    #         user = User.query.filter_by(email=email).first()
+    #         if not user:
+    #             return {
+    #                 "status": "1",
+    #                 "message": "User not found",
+    #                     "message_code": "USER_NOT_FOUND"
+    #             }, 404
+
+    #     # 先查詢邀請記錄是否存在
+    #         invite = FriendResult.query.filter_by(invite_code=invite_code).first()
+    #         if not invite:
+    #             return {
+    #                 "status": "1",
+    #                 "message": "Invitation record not found",
+    #                     "message_code": "INVITATION_RECORD_NOT_FOUND"
+    #             }, 404
+
+    #         # 檢查是否為被邀請者
+    #         if invite.relation_id != user.id:
+    #             return {
+    #                 "status": "1",
+    #                 "message": "You are not the receiver of this invitation",
+    #                     "message_code": "NOT_INVITATION_RECEIVER"
+    #             }, 403
+
+    #         # 檢查邀請狀態
+    #         if invite.status != 0:
+    #             status_text = {1: "已接受", 2: "已拒絕"}.get(invite.status, "已處理")
+    #             return {
+    #                 "status": "1",
+    #                 "message": f"邀請{status_text}"
+    #             }, 400
+
+    #         # 更新邀請狀態為接受
+    #         invite.status = 1  # 1: 接受
+    #         invite.updated_at = datetime.now(TZ_TAIWAN)
+
+    #         # 建立雙向好友關係
+    #         inviter = User.query.filter_by(id=invite.user_id).first()
+    #         if not inviter:
+    #             return {
+    #                 "status": "1",
+    #                 "message": "Inviter not found",
+    #                     "message_code": "INVITER_NOT_FOUND"
+    #             }, 404
+
+    #         # 邀請者 -> 被邀請者
+    #         friend1 = Friend(
+    #             user_id=invite.user_id,
+    #             name=user.name or user.account or f"使用者{user.id}",
+    #             relation_type=invite.type,
+    #             created_at=datetime.now(TZ_TAIWAN),
+    #             updated_at=datetime.now(TZ_TAIWAN)
+    #         )
+
+    #         # 被邀請者 -> 邀請者
+    #         friend2 = Friend(
+    #             user_id=user.id,
+    #             name=inviter.name or inviter.account or f"使用者{inviter.id}",
+    #             relation_type=invite.type,
+    #             created_at=datetime.now(TZ_TAIWAN),
+    #             updated_at=datetime.now(TZ_TAIWAN)
+    #         )
+
+    #         db.session.add(friend1)
+    #         db.session.add(friend2)
+    #         db.session.commit()
+
+    #         return {
+    #             "status": "0",
+    #             "message": "Successfully accepted invitation",
+    #                     "message_code": "INVITATION_ACCEPTED"
+    #         }, 200
+
+    #     except Exception as e:
+    #         db.session.rollback()
+    #         print(f"Accept friend invite error: {str(e)}")
+    #         print(traceback.format_exc())
+    #         return {
+    #             "status": "1",
+    #             "message": "Failed to accept invitation",
+    #                     "message_code": "ACCEPT_INVITATION_FAILED"
+    #         }, 500
+
+
+
+
+
     @staticmethod
-    def accept_friend_invite(email: str, invite_code: int):
+    def accept_friend_invite(email: str, invite_id):
         """
-        接受控糖團邀請
+        接受好友邀請
+        1. 檢查邀請是否存在且有效
+        2. 更新邀請狀態為已接受
+        3. 創建反向 FriendResult 記錄建立雙向好友關係
         """
         try:
             user = User.query.filter_by(email=email).first()
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
-        # 先查詢邀請記錄是否存在
-            invite = FriendResult.query.filter_by(invite_code=invite_code).first()
+            # 查找邀請記錄 - 根據 invite_id
+            invite = FriendResult.query.filter_by(
+                id=invite_id,
+                relation_id=user.id,  # 當前使用者是被邀請者
+                status=0  # 待處理狀態
+            ).first()
+            
             if not invite:
                 return {
                     "status": "1",
-                    "message": "邀請記錄不存在"
+                    "message": "Invitation not found or already processed",
+                    "message_code": "INVITATION_NOT_FOUND"
                 }, 404
 
-            # 檢查是否為被邀請者
-            if invite.relation_id != user.id:
-                return {
-                    "status": "1",
-                    "message": "您不是此邀請的接收者"
-                }, 403
-
-            # 檢查邀請狀態
-            if invite.status != 0:
-                status_text = {1: "已接受", 2: "已拒絕"}.get(invite.status, "已處理")
-                return {
-                    "status": "1",
-                    "message": f"邀請{status_text}"
-                }, 400
-
-            # 更新邀請狀態為接受
-            invite.status = 1  # 1: 接受
-            invite.updated_at = datetime.now(timezone.utc)
-
-            # 建立雙向好友關係
-            inviter = User.query.filter_by(id=invite.user_id).first()
+            # 獲取邀請發送者
+            inviter = User.query.get(invite.user_id)
             if not inviter:
                 return {
                     "status": "1",
-                    "message": "邀請者不存在"
+                    "message": "Inviter not found",
+                    "message_code": "INVITER_NOT_FOUND"
                 }, 404
 
-            # 邀請者 -> 被邀請者
-            friend1 = Friend(
-                user_id=invite.user_id,
-                name=user.name or user.account or f"使用者{user.id}",
-                relation_type=invite.type,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
-            )
+            # 檢查是否已經是好友
+            if AuthController.is_already_friend(user.id, inviter.id, invite.type):
+                return {
+                    "status": "1",
+                    "message": "Already friends",
+                    "message_code": "ALREADY_FRIENDS"
+                }, 400
 
-            # 被邀請者 -> 邀請者
-            friend2 = Friend(
+            # 更新邀請狀態為已接受
+            invite.status = 1
+            invite.read = True
+            invite.updated_at = datetime.now(TZ_TAIWAN)
+
+            # 創建反向好友關係 - 從被邀請者到邀請者
+            # 這樣雙方都有彼此的記錄，建立完整的好友關係
+            reverse_friendship = FriendResult(
                 user_id=user.id,
-                name=inviter.name or inviter.account or f"使用者{inviter.id}",
-                relation_type=invite.type,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc)
+                relation_id=inviter.id,
+                type=invite.type,
+                status=1,  # 已接受狀態
+                read=True,
+                created_at=datetime.now(TZ_TAIWAN),
+                updated_at=datetime.now(TZ_TAIWAN)
             )
 
-            db.session.add(friend1)
-            db.session.add(friend2)
+            db.session.add(reverse_friendship)
             db.session.commit()
+
+            print(f"Successfully accepted invitation: {invite_id}")
+            print(f"Created reverse friendship: user {user.id} -> {inviter.id}")
 
             return {
                 "status": "0",
-                "message": "成功接受邀請"
+                "message": "Friend invitation accepted successfully",
+                "message_code": "INVITATION_ACCEPTED"
             }, 200
 
         except Exception as e:
@@ -2885,7 +4088,8 @@ class AuthController:
             print(traceback.format_exc())
             return {
                 "status": "1",
-                "message": "接受邀請失敗"
+                "message": "Failed to accept invitation",
+                "message_code": "ACCEPT_INVITATION_FAILED"
             }, 500
 
     @staticmethod
@@ -2898,7 +4102,8 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
             # 查詢邀請記錄
@@ -2911,17 +4116,19 @@ class AuthController:
             if not invite:
                 return {
                     "status": "1",
-                    "message": "邀請不存在或已處理"
+                    "message": "Invitation not found or already processed",
+                    "message_code": "INVITATION_NOT_FOUND"
                 }, 404
 
             # 更新邀請狀態為拒絕
             invite.status = 2  # 2: 拒絕
-            invite.updated_at = datetime.now(timezone.utc)
+            invite.updated_at = datetime.now(TZ_TAIWAN)
             db.session.commit()
 
             return {
                 "status": "0",
-                "message": "成功"
+                "message": "Success",
+                "message_code": "SUCCESS"
             }, 200
 
         except Exception as e:
@@ -2929,7 +4136,8 @@ class AuthController:
             print(f"Refuse friend invite error: {str(e)}")
             return {
                 "status": "1",
-                "message": "拒絕邀請失敗"
+                "message": "Failed to refuse invitation",
+                "message_code": "REFUSE_INVITATION_FAILED"
             }, 500
 
     @staticmethod
@@ -2942,14 +4150,16 @@ class AuthController:
             if not user:
                 return {
                     "status": "1",
-                    "message": "使用者不存在"
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
                 }, 404
 
             # 驗證參數
             if not isinstance(friend_ids, list) or not friend_ids:
                 return {
                     "status": "1",
-                    "message": "請提供要刪除的好友 ID"
+                    "message": "Please provide friend ID to remove",
+                    "message_code": "FRIEND_ID_REQUIRED"
                 }, 400
 
             # 轉換為整數
@@ -2958,7 +4168,8 @@ class AuthController:
             except (ValueError, TypeError):
                 return {
                     "status": "1",
-                    "message": "好友 ID 格式錯誤"
+                    "message": "Invalid friend ID format",
+                    "message_code": "INVALID_FRIEND_ID"
                 }, 400
 
             # 刪除好友記錄
@@ -2971,7 +4182,8 @@ class AuthController:
 
             return {
                 "status": "0",
-                "message": "成功"
+                "message": "Success",
+                "message_code": "SUCCESS"
             }, 200
 
         except Exception as e:
@@ -2979,5 +4191,127 @@ class AuthController:
             print(f"Remove friends error: {str(e)}")
             return {
                 "status": "1",
-                "message": "刪除好友失敗"
+                "message": "Failed to remove friend",
+                "message_code": "REMOVE_FRIEND_FAILED"
+            }, 500
+        
+
+
+
+
+
+
+
+
+
+    # 添加調試方法到 AuthController
+    @staticmethod
+    def debug_user_friends(email: str):
+        """
+        調試用：檢查用戶的好友關係
+        """
+        try:
+            user = User.query.filter_by(email=email).first()
+            if not user:
+                return {
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
+                }, 404
+
+            friends = Friend.query.filter_by(user_id=user.id).all()
+            friend_data = []
+            
+            for friend in friends:
+                # 安全處理好友名稱
+                safe_name = "Friend"
+                if friend.name:
+                    try:
+                        friend.name.encode('ascii')
+                        safe_name = friend.name
+                    except UnicodeEncodeError:
+                        # 如果包含中文，轉換為安全的名稱
+                        relation_map = {0: "Doctor Group", 1: "Family Group", 2: "Control Group"}
+                        safe_name = relation_map.get(friend.relation_type, f"Group{friend.relation_type}")
+                
+                friend_data.append({
+                    "id": friend.id,
+                    "name": safe_name,
+                    "relation_type": friend.relation_type,
+                    "created_at": friend.created_at.strftime("%Y-%m-%d %H:%M:%S") if friend.created_at else None
+                })
+
+            return {
+                "user_id": user.id,
+                "total_friends": len(friends),
+                "friends": friend_data,
+                "by_type": {
+                    "doctor_group(0)": len([f for f in friends if f.relation_type == 0]),
+                    "family_group(1)": len([f for f in friends if f.relation_type == 1]),
+                    "control_group(2)": len([f for f in friends if f.relation_type == 2])
+                }
+            }, 200
+
+        except Exception as e:
+            return {
+                "error": f"Debug error: {str(e)}",
+                "message_code": "DEBUG_ERROR"
+            }, 500
+        
+
+
+    @staticmethod
+    def create_default_friends_for_user(email: str):
+        """
+        為現有用戶創建預設好友關係
+        """
+        try:
+            user = User.query.filter_by(email=email).first()
+            if not user:
+                return {
+                    "status": "1",
+                    "message": "User not found",
+                    "message_code": "USER_NOT_FOUND"
+                }, 404
+
+            # 檢查是否已有預設好友
+            existing_friends = Friend.query.filter_by(user_id=user.id).all()
+            existing_types = [f.relation_type for f in existing_friends]
+
+            # 預設好友列表
+            default_friends = [
+                {"name": "醫師團", "relation_type": 0},
+                {"name": "親友團", "relation_type": 1}, 
+                {"name": "控糖團", "relation_type": 2}
+            ]
+
+            added_friends = []
+            for friend_data in default_friends:
+                # 只添加不存在的關係類型
+                if friend_data["relation_type"] not in existing_types:
+                    default_friend = Friend(
+                        user_id=user.id,
+                        name=friend_data["name"],
+                        relation_type=friend_data["relation_type"],
+                        created_at=datetime.now(TZ_TAIWAN),
+                        updated_at=datetime.now(TZ_TAIWAN)
+                    )
+                    db.session.add(default_friend)
+                    added_friends.append(friend_data["name"])
+
+            db.session.commit()
+
+            return {
+                "status": "0",
+                "message": "Success",
+                "message_code": "SUCCESS",
+                "added_friends": added_friends
+            }, 200
+
+        except Exception as e:
+            db.session.rollback()
+            print(f"Create default friends error: {str(e)}")
+            return {
+                "status": "1",
+                "message": "Failed to create default friends",
+                "message_code": "CREATE_DEFAULT_FRIENDS_FAILED"
             }, 500

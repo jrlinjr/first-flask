@@ -4,6 +4,7 @@ from app.controllers.auth_controller import AuthController
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_jwt_extended.exceptions import NoAuthorizationError, InvalidHeaderError
 from app.models.a1c import A1cRecord
+from app.utils.api_response import APIResponse, missing_auth, invalid_auth, auth_failed, invalid_user_id
 import traceback
 
 auth_bp = Blueprint("auth", __name__) 
@@ -25,19 +26,16 @@ def check_register():
         email = request.args.get("email")
         
         if not email:
-            return jsonify({
-                "status": "1",
-                "message": "email 參數不能為空"
-            }), 400
+            return APIResponse.validation_error(
+                "Email parameter cannot be empty", 
+                "EMAIL_REQUIRED"
+            )
+        
         result, status = AuthController.check_email(email)
         return jsonify(result), status
         
     except Exception as e:
-        import traceback
-        return jsonify({
-            "status": "1",
-            "message": "檢查失敗"
-        }), 500
+        return APIResponse.handle_exception(e, "Check failed", "CHECK_FAILED")
 
 
 @auth_bp.post("/auth")
@@ -73,10 +71,7 @@ def verify_code():
         return jsonify(result), status
         
     except Exception as e:
-        return jsonify({
-            "status": "1",
-            "message": "驗證失敗"
-        }), 500
+        return APIResponse.handle_exception(e, "Verification failed", "VERIFICATION_FAILED")
 
 
 @auth_bp.post("/password/forgot")
@@ -94,7 +89,8 @@ def reset_password():
     if not isinstance(email, str):
         return jsonify({
             "status": "1",
-            "message": "無效的使用者識別"
+            "message": "Invalid user identification",
+            "message_code": "INVALID_USER_ID"
         }), 422
         
     new_password = request.json.get("password")
@@ -103,27 +99,75 @@ def reset_password():
 
 
 @auth_bp.get("/user")
-@jwt_required()
 def get_user():
     print("Get user endpoint called")
+    
+    # 路由級別記憶體監控
     try:
-        email = get_jwt_identity()
+        import psutil
+        import os
+        import gc
+        process = psutil.Process(os.getpid())
+        memory_before = process.memory_info().rss / 1024 / 1024
+        print(f"[ROUTE] user start: {memory_before:.2f} MB")
+    except:
+        pass
+    
+    try:
+        # 安全的 JWT 驗證
+        try:
+            from flask_jwt_extended import verify_jwt_in_request
+            verify_jwt_in_request()
+            email = get_jwt_identity()
+        except NoAuthorizationError:
+            print("No authorization header found")
+            return missing_auth()
+        except InvalidHeaderError as e:
+            print(f"Invalid JWT header: {e}")
+            return invalid_auth()
+        except Exception as jwt_error:
+            print(f"JWT validation error: {jwt_error}")
+            return auth_failed()
         
-        if not isinstance(email, str):
-            return jsonify({
-                "status": "1",
-                "message": f"無效的使用者識別類型: {type(email).__name__}"
-            }), 422
+        if not isinstance(email, str) or not email.strip():
+            print(f"Invalid email format: {email} (type: {type(email)})")
+            return invalid_user_id()
         
         result, status = AuthController.get_user(email)
+        
+        # 路由結束前強制清理
+        try:
+            gc.collect()
+            memory_after = process.memory_info().rss / 1024 / 1024
+            print(f"[ROUTE] user end: {memory_after:.2f} MB, change: {memory_after-memory_before:+.2f} MB")
+        except:
+            pass
+            
         return jsonify(result), status
         
     except Exception as e:
-        print(traceback.format_exc())  # 修正：移除參數
+        print(f"Get user route error: {e}")
+        print(traceback.format_exc())
         return jsonify({
             "status": "1",
-            "message": "身份驗證失敗"
+            "message": "System error",
+            "message_code": "SYSTEM_ERROR"
         }), 500
+    finally:
+        # 路由級別強制清理
+        try:
+            import gc
+            # 確保資料庫連接正常關閉
+            try:
+                from app.extensions import db
+                db.session.remove()
+            except Exception as db_cleanup_error:
+                print(f"[ROUTE] DB cleanup error in user: {db_cleanup_error}")
+            
+            collected = gc.collect()
+            print(f"[ROUTE] user cleanup: {collected} objects")
+        except Exception as route_cleanup_error:
+            print(f"[ROUTE] Cleanup error in user: {route_cleanup_error}")
 
 
 @auth_bp.patch("/user")
@@ -136,7 +180,8 @@ def update_user():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         user_data = request.get_json(silent=True) or {}
@@ -148,7 +193,8 @@ def update_user():
         print(traceback.format_exc())  # 修正：移除參數
         return jsonify({
             "status": "1",
-            "message": f"更新失敗: {str(e)}"
+            "message": f"Update failed: {str(e)}",
+            "message_code": "UPDATE_FAILED"
         }), 500
     
 
@@ -163,7 +209,8 @@ def update_user_setting():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         # 取得請求資料
@@ -192,7 +239,8 @@ def add_weight():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
 
         weight = request.json.get("weight")
@@ -217,7 +265,8 @@ def get_medical_records():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "取得病歷失敗"
+            "message": "Failed to get medical records",
+                "message_code": "GET_MEDICAL_RECORDS_FAILED"
         }), 500
 
 
@@ -232,7 +281,8 @@ def update_medical_records():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         # 取得請求資料
@@ -244,7 +294,8 @@ def update_medical_records():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "更新病歷失敗"
+            "message": "Failed to update medical records",
+                "message_code": "UPDATE_MEDICAL_RECORDS_FAILED"
         }), 500
     
 
@@ -259,7 +310,8 @@ def add_a1c():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         a1c = request.json.get("a1c")
@@ -288,7 +340,8 @@ def get_a1c_records():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "取得 A1C 紀錄失敗"
+            "message": "Failed to get A1C records",
+                "message_code": "GET_A1C_FAILED"
         }), 500
     
 
@@ -306,7 +359,8 @@ def add_care_record():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "新增照護紀錄失敗"
+            "message": "Failed to add care record",
+                "message_code": "ADD_CARE_FAILED"
         }), 500
     
 
@@ -321,7 +375,8 @@ def get_care_records():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "取得照護紀錄失敗"
+            "message": "Failed to get care records",
+                "message_code": "GET_CARE_FAILED"
         }), 500
 
 
@@ -338,7 +393,8 @@ def add_share():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         data = request.get_json(silent=True) or {}
@@ -371,17 +427,19 @@ def add_share():
         except (ValueError, TypeError) as e:
             return jsonify({
                 "status": "1",
-                "message": f"參數型態錯誤: {str(e)}"
+                "message": f"Parameter type error: {str(e)}",
+                "message_code": "PARAMETER_TYPE_ERROR"
             }), 400
         
         # 驗證 relation_type 範圍
         if relation_type not in [0, 1, 2]:
             return jsonify({
                 "status": "1",
-                "message": "relation_type 必須為 0(醫師團), 1(親友團), 或 2(糖友團)"
+                "message": "relation_type must be 0(doctor), 1(family), or 2(friend)",
+                "message_code": "INVALID_RELATION_TYPE"
             }), 400
         
-        result, status = AuthController.add_share_record(email, record_type, record_id, relation_type)
+        result, status = AuthController.add_share_record(email, record_type, record_id, relation_type )
         return jsonify(result), status
         
     except Exception as e:
@@ -389,7 +447,8 @@ def add_share():
         print(traceback.format_exc())
         return jsonify({
             "status": "1",
-            "message": "分享失敗"
+            "message": "Share failed",
+                "message_code": "SHARE_FAILED"
         }), 500
 
 
@@ -405,7 +464,8 @@ def get_shared_records(relation_type):
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         result, status = AuthController.get_shared_records(email, relation_type)
@@ -416,7 +476,8 @@ def get_shared_records(relation_type):
         print(traceback.format_exc())  # 修正：移除參數 e
         return jsonify({
             "status": "1",
-            "message": "取得分享記錄失敗"
+            "message": "Failed to get shared records",
+            "message_code": "GET_SHARED_RECORDS_FAILED"
         }), 500
 
 
@@ -434,7 +495,8 @@ def get_news():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         result, status = AuthController.get_news(email)
@@ -443,7 +505,8 @@ def get_news():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "取得最新消息失敗"
+            "message": "Failed to get news",
+            "message_code": "GET_NEWS_FAILED"
         }), 500
 
 
@@ -457,7 +520,8 @@ def get_friend_list():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
 
         result, status = AuthController.get_friend_list(email)
@@ -465,10 +529,11 @@ def get_friend_list():
 
     except Exception as e:
         print(f"Get friend list route error: {str(e)}")
-        print(traceback.format_exc())  # 修正：移除參數
+        print(traceback.format_exc())
         return jsonify({
             "status": "1",
-            "message": "取得好友列表失敗"
+            "message": "Failed to get friends list",
+            "message_code": "GET_FRIENDS_LIST_FAILED"
         }), 500
 
 
@@ -483,7 +548,8 @@ def add_friend():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         data = request.get_json(silent=True) or {}
@@ -496,7 +562,8 @@ def add_friend():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "新增好友失敗"
+            "message": "Failed to add friend",
+                "message_code": "ADD_FRIEND_FAILED"
         }), 500
     
 
@@ -512,7 +579,8 @@ def get_diary_entries():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         # 從查詢參數獲取日期
@@ -524,7 +592,8 @@ def get_diary_entries():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "取得日記失敗"
+            "message": "Failed to get diary entries",
+                "message_code": "GET_DIARY_FAILED"
         }), 500
 
 @auth_bp.put("/user/badge")
@@ -538,7 +607,8 @@ def update_user_badge():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         # 取得請求資料
@@ -551,7 +621,8 @@ def update_user_badge():
         if badge is None:
             return jsonify({
                 "status": "1",
-                "message": "缺少 Badge 參數"
+                "message": "Missing badge parameter",
+                "message_code": "MISSING_BADGE_PARAMETER"
             }), 400
         
         result, status = AuthController.update_user_badge(email, badge)
@@ -561,7 +632,8 @@ def update_user_badge():
         print(f"Request data: {request.get_json(silent=True)}")
         return jsonify({
             "status": "1",
-            "message": "更新徽章失敗"
+            "message": "Failed to update badge",
+                "message_code": "UPDATE_BADGE_FAILED"
         }), 500
     
 
@@ -577,7 +649,8 @@ def get_user_records():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         # 取得請求資料
@@ -590,7 +663,8 @@ def get_user_records():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "取得健康記錄失敗"
+            "message": "Failed to get health records",
+                "message_code": "GET_HEALTH_RECORDS_FAILED"
         }), 500
     
 
@@ -603,7 +677,8 @@ def delete_user_records():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
 
         # 取得請求資料
@@ -615,7 +690,8 @@ def delete_user_records():
         #     print(delete_ids, type(delete_ids))  # 調試輸出
         #     return jsonify({
         #         "status": "1",
-        #         "message": "deleteObject 必須為陣列"
+        #         "message": "deleteObject must be an array",
+        #         "message_code": "DELETE_OBJECT_MUST_BE_ARRAY"
         #     }), 400
 
         # 呼叫 controller 處理
@@ -625,7 +701,8 @@ def delete_user_records():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "刪除健康記錄失敗"
+            "message": "Failed to delete health records",
+                "message_code": "DELETE_HEALTH_RECORDS_FAILED"
         }), 500
     
 
@@ -643,7 +720,8 @@ def add_blood_sugar():
             print("Invalid email format")
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
         
         # 取得請求資料
@@ -676,7 +754,8 @@ def add_blood_sugar():
         traceback.print_exc()  # 打印完整堆疊追蹤
         return jsonify({
             "status": "1",
-            "message": "新增血糖記錄失敗"
+            "message": "Failed to add blood sugar record",
+                "message_code": "ADD_BLOOD_SUGAR_FAILED"
         }), 500
 
 
@@ -685,45 +764,131 @@ def add_blood_sugar():
 @auth_bp.get("/friend/code")
 @jwt_required()
 def get_friend_invite_code():
-    print("Get friend invite code endpoint called")  # 調試輸出
+    print("Get friend invite code endpoint called")
+    
+    # 路由級別記憶體監控
     try:
+        import psutil
+        import os
+        import gc
+        process = psutil.Process(os.getpid())
+        memory_before = process.memory_info().rss / 1024 / 1024
+        print(f"[ROUTE] friend/code start: {memory_before:.2f} MB")
+    except:
+        pass
+    
+    try:
+        # 使用標準的 JWT 驗證
         email = get_jwt_identity()
-        if not isinstance(email, str):
+        
+        if not isinstance(email, str) or not email.strip():
+            print(f"Invalid email format: {email} (type: {type(email)})")
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "invalid user identity",
+                "message_code": "INVALID_USER_IDENTITY"
             }), 422
 
         result, status = AuthController.get_friend_invite_code(email)
+        
+        # 路由結束前強制清理
+        try:
+            gc.collect()
+            memory_after = process.memory_info().rss / 1024 / 1024
+            print(f"[ROUTE] friend/code end: {memory_after:.2f} MB, change: {memory_after-memory_before:+.2f} MB")
+        except:
+            pass
+            
         return jsonify(result), status
 
     except Exception as e:
+        print(f"Friend code route error: {e}")
+        print(traceback.format_exc())
         return jsonify({
             "status": "1",
-            "message": "取得邀請碼失敗"
+            "message": "failed to get invite code",
+            "message_code": "GET_INVITE_CODE_FAILED"
         }), 500
+    finally:
+        # 路由級別強制清理
+        try:
+            import gc
+            # 確保資料庫連接正常關閉
+            try:
+                from app.extensions import db
+                db.session.remove()
+            except Exception as db_cleanup_error:
+                print(f"[ROUTE] DB cleanup error in friend/code: {db_cleanup_error}")
+            
+            collected = gc.collect()
+            print(f"[ROUTE] friend/code cleanup: {collected} objects")
+        except Exception as route_cleanup_error:
+            print(f"[ROUTE] Cleanup error in friend/code: {route_cleanup_error}")
 
 
 @auth_bp.get("/friend/results")
 @jwt_required()
 def get_friend_results():
-    print("Get friend results endpoint called")  # 調試輸出
+    print("Get friend results endpoint called")
+    
+    # 路由級別記憶體監控
     try:
+        import psutil
+        import os
+        import gc
+        process = psutil.Process(os.getpid())
+        memory_before = process.memory_info().rss / 1024 / 1024
+        print(f"[ROUTE] friend/results start: {memory_before:.2f} MB")
+    except:
+        pass
+    
+    try:
+        # 使用標準的 JWT 驗證
         email = get_jwt_identity()
-        if not isinstance(email, str):
+        
+        if not isinstance(email, str) or not email.strip():
+            print(f"Invalid email format: {email} (type: {type(email)})")
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "invalid user identity",
+                "message_code": "INVALID_USER_IDENTITY"
             }), 422
 
         result, status = AuthController.get_friend_results(email)
+        
+        # 路由結束前強制清理
+        try:
+            gc.collect()
+            memory_after = process.memory_info().rss / 1024 / 1024
+            print(f"[ROUTE] friend/results end: {memory_after:.2f} MB, change: {memory_after-memory_before:+.2f} MB")
+        except:
+            pass
+            
         return jsonify(result), status
 
     except Exception as e:
+        print(f"Friend results route error: {e}")
+        print(traceback.format_exc())
         return jsonify({
             "status": "1",
-            "message": "取得邀請結果失敗"
+            "message": "failed to get invitation results",
+            "message_code": "GET_INVITE_RESULTS_FAILED"
         }), 500
+    finally:
+        # 路由級別強制清理
+        try:
+            import gc
+            # 確保資料庫連接正常關閉
+            try:
+                from app.extensions import db
+                db.session.remove()
+            except Exception as db_cleanup_error:
+                print(f"[ROUTE] DB cleanup error in friend/results: {db_cleanup_error}")
+            
+            collected = gc.collect()
+            print(f"[ROUTE] friend/results cleanup: {collected} objects")
+        except Exception as route_cleanup_error:
+            print(f"[ROUTE] Cleanup error in friend/results: {route_cleanup_error}")
 
 
 
@@ -739,7 +904,8 @@ def get_friend_requests():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
 
         result, status = AuthController.get_friend_requests(email)
@@ -748,7 +914,8 @@ def get_friend_requests():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "取得邀請列表失敗"
+            "message": "Failed to get invitation list",
+                "message_code": "GET_INVITATIONS_FAILED"
         }), 500
     
 
@@ -766,7 +933,8 @@ def add_diet_record():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
 
         data = request.get_json(silent=True) or {}
@@ -793,7 +961,8 @@ def add_diet_record():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "新增飲食記錄失敗"
+            "message": "Failed to add diet record",
+                "message_code": "ADD_DIET_FAILED"
         }), 500
     
 
@@ -806,7 +975,8 @@ def add_blood_pressure():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
 
         data = request.get_json(silent=True) or {}
@@ -819,7 +989,8 @@ def add_blood_pressure():
         if systolic is None or diastolic is None or pulse is None:
             return jsonify({
                 "status": "1",
-                "message": "血壓與心跳參數不能為空"
+                "message": "Blood pressure and heart rate parameters cannot be empty",
+                "message_code": "BP_HR_PARAMETERS_REQUIRED"
             }), 400
 
         result, status = AuthController.add_blood_pressure(
@@ -834,7 +1005,8 @@ def add_blood_pressure():
     except Exception as e:
         return jsonify({
             "status": "1",
-            "message": "新增血壓記錄失敗"
+            "message": "Failed to add blood pressure record",
+                "message_code": "ADD_BLOOD_PRESSURE_FAILED"
         }), 500
     
 
@@ -842,44 +1014,63 @@ def add_blood_pressure():
 @auth_bp.post("/friend/send")
 @jwt_required()
 def send_friend_invite():
+    print("DEBUG: Friend send endpoint called")
     try:
         email = get_jwt_identity()
+        print(f"DEBUG: JWT identity: {email}")
         
         if not isinstance(email, str):
+            print(f"DEBUG: Invalid email type: {type(email)}")
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "invalid user identity",
+                "message_code": "INVALID_USER_IDENTITY"
             }), 422
         
         data = request.get_json(silent=True) or {}
+        print(f"DEBUG: Received request data: {data}")
+        
         invite_code = data.get("invite_code")
         relation_type = data.get("type")  # 0: 醫師團; 1: 親友團; 2: 糖友團
         
+        print(f"DEBUG: invite_code={invite_code}, relation_type={relation_type}")
+        
         # 驗證必要參數
         if invite_code is None or relation_type is None:
+            print(f"DEBUG: Missing parameters - invite_code: {invite_code}, relation_type: {relation_type}")
             return jsonify({
                 "status": "1",
-                "message": "缺少必要參數"
+                "message": "missing required parameters",
+                "message_code": "MISSING_PARAMETERS"
             }), 400
         
         # 型態驗證
         try:
             relation_type = int(relation_type)
-        except (ValueError, TypeError):
+            print(f"DEBUG: Converted relation_type to int: {relation_type}")
+        except (ValueError, TypeError) as e:
+            print(f"DEBUG: Type conversion error: {e}")
             return jsonify({
                 "status": "1",
-                "message": "參數型態錯誤"
+                "message": "parameter type error",
+                "message_code": "PARAMETER_TYPE_ERROR"
             }), 400
         
+        print(f"DEBUG: About to call AuthController.send_friend_invite")
         # 呼叫控制器處理邀請碼邏輯
         result, status = AuthController.send_friend_invite(email, invite_code, relation_type)
+        print(f"DEBUG: Controller returned - result: {result}, status: {status}")
+        
         return jsonify(result), status
         
     except Exception as e:
-        print(f"Send friend invite route error: {str(e)}")
+        print(f"DEBUG: Route exception: {str(e)}")
+        import traceback
+        print(f"DEBUG: Full traceback: {traceback.format_exc()}")
         return jsonify({
             "status": "1",
-            "message": "發送邀請失敗"
+            "message": "failed to send invitation",
+            "message_code": "SEND_INVITATION_FAILED"
         }), 500
 
 @auth_bp.get("/friend/<int:invite_id>/accept")
@@ -891,7 +1082,8 @@ def accept_friend_invite(invite_id):
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
 
         result, status = AuthController.accept_friend_invite(email, invite_id)
@@ -901,7 +1093,8 @@ def accept_friend_invite(invite_id):
         print(f"Accept friend invite route error: {str(e)}")
         return jsonify({
             "status": "1",
-            "message": "接受邀請失敗"
+            "message": "Failed to accept invitation",
+                "message_code": "ACCEPT_INVITATION_FAILED"
         }), 500
 
 @auth_bp.get("/friend/<int:invite_id>/refuse")
@@ -913,7 +1106,8 @@ def refuse_friend_invite(invite_id):
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
 
         result, status = AuthController.refuse_friend_invite(email, invite_id)
@@ -923,7 +1117,8 @@ def refuse_friend_invite(invite_id):
         print(f"Refuse friend invite route error: {str(e)}")
         return jsonify({
             "status": "1",
-            "message": "拒絕邀請失敗"
+            "message": "Failed to refuse invitation",
+                "message_code": "REFUSE_INVITATION_FAILED"
         }), 500
 
 @auth_bp.delete("/friend/remove")
@@ -935,7 +1130,8 @@ def remove_friends():
         if not isinstance(email, str):
             return jsonify({
                 "status": "1",
-                "message": "無效的使用者識別"
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
             }), 422
 
         data = request.get_json(silent=True) or {}
@@ -948,5 +1144,37 @@ def remove_friends():
         print(f"Remove friends route error: {str(e)}")
         return jsonify({
             "status": "1",
-            "message": "刪除好友失敗"
+            "message": "Failed to remove friend",
+                "message_code": "REMOVE_FRIEND_FAILED"
         }), 500
+    
+
+
+
+
+
+
+
+
+@auth_bp.get("/debug/friends")
+@jwt_required()
+def debug_friends():
+    try:
+        email = get_jwt_identity()
+        result, status = AuthController.debug_user_friends(email)
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+
+
+
+@auth_bp.post("/friends/default")
+@jwt_required()
+def create_default_friends():
+    try:
+        email = get_jwt_identity()
+        result, status = AuthController.create_default_friends_for_user(email)
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

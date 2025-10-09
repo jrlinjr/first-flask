@@ -1,6 +1,9 @@
 from app.extensions import db
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
+
+# 定義台灣時區 UTC+8
+TZ_TAIWAN = timezone(timedelta(hours=8))
 
 class Diary(db.Model):
     __tablename__ = "diary"
@@ -36,13 +39,13 @@ class Diary(db.Model):
     reply = db.Column(db.Text, nullable=True, default="")       # 回覆
     type = db.Column(db.String(50), nullable=True, default="") # 記錄類型
     
-    recorded_at = db.Column(db.DateTime, nullable=False, default=datetime.now(timezone.utc))
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.now(timezone.utc))
+    recorded_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(TZ_TAIWAN))
+    created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(TZ_TAIWAN))
     updated_at = db.Column(
         db.DateTime, 
         nullable=False, 
-        default=datetime.now(timezone.utc),
-        onupdate=datetime.now(timezone.utc)
+        default=lambda: datetime.now(TZ_TAIWAN),
+        onupdate=lambda: datetime.now(TZ_TAIWAN)
     )
 
     def __repr__(self):

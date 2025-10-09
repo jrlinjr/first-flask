@@ -1,5 +1,7 @@
 from app.extensions import db
-from datetime import datetime, timezone
+from datetime import datetime, timezone,timedelta
+
+TZ_TAIWAN = timezone(timedelta(hours=8))
 
 class ShareRecord(db.Model):
     __tablename__ = "share_records"
@@ -17,12 +19,18 @@ class ShareRecord(db.Model):
     shared_at = db.Column(
         db.DateTime, 
         nullable=False,
-        default=datetime.now(timezone.utc)
+        default=datetime.now(TZ_TAIWAN)
     )
     created_at = db.Column(
         db.DateTime, 
         nullable=False,
-        default=datetime.now(timezone.utc)
+        default=datetime.now(TZ_TAIWAN)
+    )
+    updated_at = db.Column(
+        db.DateTime, 
+        nullable=False,
+        default=datetime.now(TZ_TAIWAN),
+        onupdate=datetime.now(TZ_TAIWAN)
     )
 
     def __repr__(self):
