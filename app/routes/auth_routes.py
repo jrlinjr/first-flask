@@ -791,6 +791,10 @@ def get_friend_invite_code():
 
         result, status = AuthController.get_friend_invite_code(email)
         
+        # 🔧 添加調試日誌
+        print(f"[DEBUG] get_friend_invite_code result: {result}")
+        print(f"[DEBUG] get_friend_invite_code status: {status}")
+        
         # 路由結束前強制清理
         try:
             gc.collect()
@@ -799,7 +803,9 @@ def get_friend_invite_code():
         except:
             pass
             
-        return jsonify(result), status
+        response = jsonify(result)
+        print(f"[DEBUG] jsonify response: {response.get_json()}")
+        return response, status
 
     except Exception as e:
         print(f"Friend code route error: {e}")
@@ -1120,6 +1126,32 @@ def refuse_friend_invite(invite_id):
             "message": "Failed to refuse invitation",
                 "message_code": "REFUSE_INVITATION_FAILED"
         }), 500
+
+@auth_bp.patch("/friend/result/<int:result_id>/read")
+@jwt_required()
+def mark_friend_result_as_read(result_id):
+    """標記邀請結果為已讀"""
+    print(f"Mark friend result {result_id} as read endpoint called")
+    try:
+        email = get_jwt_identity()
+        if not isinstance(email, str):
+            return jsonify({
+                "status": "1",
+                "message": "Invalid user identification",
+                "message_code": "INVALID_USER_ID"
+            }), 422
+
+        result, status = AuthController.mark_friend_result_as_read(email, result_id)
+        return jsonify(result), status
+
+    except Exception as e:
+        print(f"Mark friend result as read route error: {str(e)}")
+        return jsonify({
+            "status": "1",
+            "message": "Failed to mark result as read",
+            "message_code": "MARK_READ_FAILED"
+        }), 500
+
 
 @auth_bp.delete("/friend/remove")
 @jwt_required()
