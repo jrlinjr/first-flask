@@ -20,3 +20,8 @@ tests/
 Dockerfile
 docker-compose.yml
 .dockerignore
+
+# 本機的文件、Postman、工具資料夾（也都不進版控）
+docs/
+postman/
+.gstack/
