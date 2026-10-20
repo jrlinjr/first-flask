@@ -72,9 +72,28 @@ def test_add_weight_calculates_bmi(client, alice, M, db_session):
     diary = db_session.get(M.Diary, 1)
     assert diary.type == "weight"
     assert diary.weight == 72.25
-    # 身高固定用預設 170 公分算 BMI
+    # 使用者資料沒填身高，用預設 170 公分算 BMI
     assert diary.bmi == 25.0
     assert diary.body_fat == 0.0
+
+
+def test_add_weight_uses_user_height_for_bmi(client, alice, M, db_session):
+    client.patch("/api/user", headers=alice.headers, json={"height": 160})
+
+    response = client.post("/api/user/weight", headers=alice.headers, json={"weight": 64})
+    assert response.status_code == 200
+    # 64 / 1.6² = 25.0
+    assert db_session.get(M.Diary, 1).bmi == 25.0
+
+
+def test_add_weight_unreasonable_user_height_uses_default(client, alice, M, db_session):
+    # PATCH /api/user 不檢查身高範圍，存了不合理的值也不能讓新增體重失敗
+    client.patch("/api/user", headers=alice.headers, json={"height": 500})
+
+    response = client.post("/api/user/weight", headers=alice.headers, json={"weight": 72.25})
+    assert response.status_code == 200
+    # 改用預設 170 公分：72.25 / 1.7² = 25.0
+    assert db_session.get(M.Diary, 1).bmi == 25.0
 
 
 @pytest.mark.parametrize("payload, code", [

@@ -14,7 +14,7 @@ from utils.extensions import db
 from utils.logger import logger
 from utils.time_utils import now_taiwan, parse_recorded_at
 
-# 新增體重時沒有傳身高，就用這個值算 BMI（公分）
+# 新增體重時沒有傳身高、使用者資料也沒填（或不合理），就用這個值算 BMI（公分）
 DEFAULT_HEIGHT_CM = 170
 
 RECORDED_AT_FORMAT_ERROR = ("Invalid recorded_at format, should be YYYY-MM-DD HH:MM:SS", "INVALID_RECORDED_AT_FORMAT")
@@ -191,7 +191,7 @@ class RecordService:
             return error_body("Failed to add blood sugar record", "ADD_BLOOD_SUGAR_FAILED"), 500
 
     @staticmethod
-    def add_weight(email: str, weight, bmi=None, body_fat=None, height=DEFAULT_HEIGHT_CM, recorded_at: str | None = None):
+    def add_weight(email: str, weight, bmi=None, body_fat=None, height=None, recorded_at: str | None = None):
         """
         新增體重記錄
 
@@ -199,13 +199,20 @@ class RecordService:
             weight: 體重（kg，必填）
             bmi: BMI（沒傳就用身高自動算）
             body_fat: 體脂肪率（可選）
-            height: 身高（cm，用來算 BMI）
+            height: 身高（cm，用來算 BMI；沒傳就用使用者資料裡的身高）
             recorded_at: 記錄時間（YYYY-MM-DD HH:MM:SS）
         """
         try:
             user = User.query.filter_by(email=email).first()
             if not user:
                 return error_body("User not found", "USER_NOT_FOUND"), 404
+
+            # 沒傳身高就用使用者資料裡的；沒填或不合理（PATCH /api/user 不檢查範圍）才用預設值
+            if height is None:
+                if user.height and 0 < user.height <= 300:
+                    height = user.height
+                else:
+                    height = DEFAULT_HEIGHT_CM
 
             try:
                 height = float(height)
