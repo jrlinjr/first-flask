@@ -6,6 +6,7 @@
 from sqlalchemy.orm import joinedload
 
 from models.user import User
+from models.diary import Diary
 from models.share import ShareRecord
 from models.friendresult import FriendResult
 from utils.api_response import success_body, error_body
@@ -43,6 +44,11 @@ class ShareService:
 
             if not record_id or record_id <= 0:
                 return error_body("Invalid record_id parameter", "INVALID_RECORD_ID"), 400
+
+            # 只能分享自己的記錄；別人的記錄跟不存在的記錄回一樣的 404，不透露那筆 id 有沒有人用
+            diary = Diary.query.filter_by(id=record_id, user_id=user.id).first()
+            if not diary:
+                return error_body("Record not found", "RECORD_NOT_FOUND"), 404
 
             existing_share = ShareRecord.query.filter_by(
                 user_id=user.id,
@@ -105,9 +111,12 @@ class ShareService:
             share_records = (
                 ShareRecord.query
                 .options(joinedload(ShareRecord.user))  # 預先載入分享者資訊
+                # 保險：記錄必須是分享者本人的（擋掉修正越權分享之前就寫進資料庫的舊資料）
+                .join(Diary, Diary.id == ShareRecord.record_id)
                 .filter(
                     ShareRecord.user_id.in_(friend_ids),
                     ShareRecord.relation_type == relation_type,
+                    Diary.user_id == ShareRecord.user_id,
                 )
                 .order_by(ShareRecord.created_at.desc())
                 .limit(SHARED_RECORDS_LIMIT)

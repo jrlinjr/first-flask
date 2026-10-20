@@ -38,6 +38,23 @@ def test_add_share_validation(client, alice, payload, code):
     assert response.get_json()["message_code"] == code
 
 
+def test_add_share_nonexistent_record(client, alice, M, db_session):
+    response = client.post("/api/share", headers=alice.headers, json={"type": 2, "id": 999, "relation_type": 1})
+    assert response.status_code == 404
+    assert response.get_json()["message_code"] == "RECORD_NOT_FOUND"
+    assert M.ShareRecord.query.count() == 0
+
+
+def test_add_share_other_users_record_is_rejected(client, alice, bob, M, db_session):
+    # alice 的記錄（id 1），bob 不能拿去分享
+    client.post("/api/user/blood/sugar", headers=alice.headers, json={"sugar": 100})
+
+    response = client.post("/api/share", headers=bob.headers, json={"type": 2, "id": 1, "relation_type": 1})
+    assert response.status_code == 404
+    assert response.get_json()["message_code"] == "RECORD_NOT_FOUND"
+    assert M.ShareRecord.query.count() == 0
+
+
 # ---------------- 好友分享給我的 GET /api/share/<relation_type> ----------------
 
 def test_get_shared_records_from_friend(client, alice, bob):
@@ -58,6 +75,19 @@ def test_get_shared_records_from_friend(client, alice, bob):
 
     # 不同分組看不到
     assert client.get("/api/share/0", headers=bob.headers).get_json()["records"] == []
+
+
+def test_get_shared_records_hides_records_not_owned_by_sharer(client, make_user, alice, bob, M, db_session):
+    # 修正前就存在的越權分享：bob 分享了 alice 的記錄，bob 的好友 carol 不能看到
+    carol = make_user("carol@example.com", account="carol")
+    make_friends(client, bob, carol, relation_type=1)
+    client.post("/api/user/blood/sugar", headers=alice.headers, json={"sugar": 123})
+    db_session.add(M.ShareRecord(user_id=bob.id, record_type=2, record_id=1, relation_type=1))
+    db_session.commit()
+
+    response = client.get("/api/share/1", headers=carol.headers)
+    assert response.status_code == 200
+    assert response.get_json()["records"] == []
 
 
 def test_get_shared_records_without_friends(client, alice):
