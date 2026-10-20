@@ -20,6 +20,9 @@ from utils.api_response import error_body
 from utils.extensions import db, bcrypt, jwt, migrate, mail
 from utils.logger import logger
 
+# 沒設 MAIL_USERNAME 時的寄件者
+DEFAULT_MAIL_SENDER = "noreply@localhost"
+
 
 def create_app() -> Flask:
     app = Flask(__name__)
@@ -45,13 +48,15 @@ def create_app() -> Flask:
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     # 郵件
+    # 寄件者用 MAIL_USERNAME；沒填（例如開發時開不寄信模式）就用預設值，
+    # 不然 Flask-Mail 會因為沒有寄件者而出錯，連不寄信模式也一樣
     app.config.update(
         MAIL_SERVER=env.mail_server,
         MAIL_PORT=env.mail_port,
         MAIL_USE_TLS=env.mail_use_tls,
         MAIL_USERNAME=env.mail_username,
         MAIL_PASSWORD=env.mail_password,
-        MAIL_DEFAULT_SENDER=env.mail_username,
+        MAIL_DEFAULT_SENDER=env.mail_username or DEFAULT_MAIL_SENDER,
         MAIL_SUPPRESS_SEND=env.mail_suppress_send,
     )
 

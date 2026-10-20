@@ -314,3 +314,44 @@ def test_reset_password_without_email_uses_login_identity(client, alice):
     response = client.post("/api/password/reset", headers=alice.headers, json={"password": "brand-new-pass"})
     assert response.status_code == 200
     assert client.post("/api/auth", json={"email": alice.email, "password": "brand-new-pass"}).status_code == 200
+
+
+# ---------------- 沒設 MAIL_USERNAME（開發時開不寄信模式，常常不填寄件帳號） ----------------
+
+@pytest.fixture
+def client_without_mail_username(monkeypatch):
+    """另外建一個沒設 MAIL_USERNAME 的 app（conftest 的 app 有設，測不到這個情況）"""
+    from main import create_app
+    from shared import env
+    from utils.extensions import db, bcrypt
+
+    monkeypatch.setattr(env, "mail_username", None)
+    monkeypatch.setattr(env, "mail_password", None)
+    monkeypatch.setattr(env, "mail_suppress_send", True)
+    flask_app = create_app()
+    flask_app.config["TESTING"] = True
+    flask_app.extensions["mail"].suppress = True
+    # create_app 裡的 bcrypt.init_app 會把 rounds 設回 12，改回測試用的 4
+    bcrypt._log_rounds = 4
+
+    yield flask_app.test_client()
+
+    with flask_app.app_context():
+        db.engine.dispose()
+
+
+def test_register_without_mail_username_uses_default_sender(client_without_mail_username, outbox):
+    response = client_without_mail_username.post("/api/register", json={"email": "u@example.com", "password": DEFAULT_PASSWORD})
+    assert response.status_code == 201
+    assert outbox[0].sender == "noreply@localhost"
+
+
+def test_forgot_password_without_mail_username(client_without_mail_username, alice, outbox):
+    response = client_without_mail_username.post("/api/password/forgot", json={"email": alice.email})
+    assert response.status_code == 200
+    assert response.get_json()["message_code"] == "NEW_PASSWORD_SENT"
+
+    # 新密碼有存進資料庫，可以登入
+    new_password = outbox[0].body.split(":", 1)[1].split()[0]
+    response = client_without_mail_username.post("/api/auth", json={"email": alice.email, "password": new_password})
+    assert response.status_code == 200
