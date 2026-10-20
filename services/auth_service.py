@@ -182,6 +182,12 @@ class AuthService:
             if not user or not bcrypt.check_password_hash(user.password_hash, password):
                 return error_body("Incorrect username or password", "INVALID_CREDENTIALS"), 401
 
+            # 密碼對了才檢查是否驗證過 email（放在密碼比對之後，才不會洩漏帳號是否存在）
+            # 沒驗證就不發 token，避免用別人的 email 註冊後直接登入
+            if not user.is_verified:
+                logger.warning(f"[帳號:{email}] 未驗證 email 嘗試登入")
+                return error_body("Email has not been verified", "EMAIL_NOT_VERIFIED", needs_verification=True), 403
+
             # 建立 JWT，用 email 當作身分（之後 get_jwt_identity() 拿到的就是 email）
             token = create_access_token(identity=email)
             return success_body("Login successful", "LOGIN_SUCCESS", token=token), 200

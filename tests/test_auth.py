@@ -125,6 +125,51 @@ def test_login_failures(client, alice, payload, status, code):
     assert response.get_json()["message_code"] == code
 
 
+# ---------------- Email 驗證不能被繞過 ----------------
+
+def test_login_unverified_is_rejected(client, outbox):
+    """攻擊流程：用別人的 email 註冊（收不到驗證信）→ 直接登入，不能拿到 token"""
+    client.post("/api/register", json={"email": "victim@example.com", "password": DEFAULT_PASSWORD})
+
+    response = client.post("/api/auth", json={"email": "victim@example.com", "password": DEFAULT_PASSWORD})
+    assert response.status_code == 403
+    body = response.get_json()
+    assert body["status"] == "1"
+    assert body["message_code"] == "EMAIL_NOT_VERIFIED"
+    assert body["needs_verification"] is True
+    assert "token" not in body
+
+
+def test_login_unverified_wrong_password_is_invalid_credentials(client, outbox):
+    """未驗證 + 密碼錯：跟帳號不存在一樣回 401，不透露這個 email 有註冊過"""
+    client.post("/api/register", json={"email": "victim@example.com", "password": DEFAULT_PASSWORD})
+
+    response = client.post("/api/auth", json={"email": "victim@example.com", "password": "wrong-password"})
+    assert response.status_code == 401
+    assert response.get_json()["message_code"] == "INVALID_CREDENTIALS"
+
+
+def test_login_after_verification_succeeds(client, outbox):
+    """真正的 email 主人從信裡拿到驗證碼、驗證完，就可以登入"""
+    client.post("/api/register", json={"email": "u@example.com", "password": DEFAULT_PASSWORD})
+    code = extract_code(outbox[0].body)
+    client.post("/api/verification/check", json={"email": "u@example.com", "code": code})
+
+    response = client.post("/api/auth", json={"email": "u@example.com", "password": DEFAULT_PASSWORD})
+    assert response.status_code == 200
+    assert response.get_json()["token"]
+
+
+def test_get_user_does_not_expose_verification_code(client, alice, M, db_session):
+    """GET /api/user 不回傳驗證碼（就算資料庫裡有一組還沒用掉的驗證碼）"""
+    client.post("/api/verification/send", json={"email": alice.email})
+    assert M.User.query.filter_by(email=alice.email).first().verification_code
+
+    response = client.get("/api/user", headers=alice.headers)
+    assert response.status_code == 200
+    assert "verification_code" not in response.get_json()["user"]
+
+
 # ---------------- 驗證碼 /api/verification/* ----------------
 
 def test_send_verification_unregistered(client):

@@ -112,7 +112,7 @@ class UserService:
                 # users 表沒有 updated_at，沿用 created_at
                 "updated_at": safe_datetime_str(getattr(user, "created_at", None)),
                 "invite_code": invite_code,
-                "verification_code": safe_str(getattr(user, "verification_code", "")),
+                # 不回傳 verification_code：驗證碼只能從信箱拿到，回傳出去等於可以繞過 email 驗證
             }
 
             # 4. 各項上下限設定
