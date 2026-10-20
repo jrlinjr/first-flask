@@ -5,3 +5,6 @@ __pycache__/
 log/
 .pytest_cache/
 .DS_Store
+.gstack/
+docs/
+postman/
