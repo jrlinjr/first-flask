@@ -168,7 +168,7 @@ def make_user(client, app):
         assert response.status_code == 201, response.get_json()
         code = extract_code(messages[-1].body)
 
-        response = client.post("/api/verification/check", json={"email": email, "code": code})
+        response = client.post("/api/verification/check", json={"email": email, "code": code, "password": password})
         assert response.status_code == 200, response.get_json()
 
         response = client.post("/api/auth", json={"email": email, "password": password})

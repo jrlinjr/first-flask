@@ -63,12 +63,13 @@ def send_verification():
 @auth_bp.post("/verification/check")
 @handle_route_errors("Verification failed", "VERIFICATION_FAILED", error_details=True)
 def verify_code():
-    """檢查驗證碼"""
+    """檢查驗證碼，body：{"email": ..., "code": ..., "password": 註冊時設的密碼}"""
     data: dict = request.get_json()
     email: str = data.get("email")
     code: str = data.get("code")
+    password = data.get("password")
 
-    result, status = AuthService.verify_code(email, code)
+    result, status = AuthService.verify_code(email, code, password)
     return jsonify(result), status
 
 

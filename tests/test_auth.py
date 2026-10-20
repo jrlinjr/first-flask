@@ -153,11 +153,68 @@ def test_login_after_verification_succeeds(client, outbox):
     """真正的 email 主人從信裡拿到驗證碼、驗證完，就可以登入"""
     client.post("/api/register", json={"email": "u@example.com", "password": DEFAULT_PASSWORD})
     code = extract_code(outbox[0].body)
-    client.post("/api/verification/check", json={"email": "u@example.com", "code": code})
+    client.post("/api/verification/check", json={"email": "u@example.com", "code": code, "password": DEFAULT_PASSWORD})
 
     response = client.post("/api/auth", json={"email": "u@example.com", "password": DEFAULT_PASSWORD})
     assert response.status_code == 200
     assert response.get_json()["token"]
+
+
+def test_verify_requires_password(client, outbox, M, db_session):
+    client.post("/api/register", json={"email": "u@example.com", "password": DEFAULT_PASSWORD})
+    code = extract_code(outbox[0].body)
+
+    response = client.post("/api/verification/check", json={"email": "u@example.com", "code": code})
+    assert response.status_code == 400
+    assert response.get_json()["message_code"] == "PASSWORD_REQUIRED"
+    assert M.User.query.filter_by(email="u@example.com").first().is_verified is False
+
+
+def test_verify_wrong_password(client, outbox, M, db_session):
+    client.post("/api/register", json={"email": "u@example.com", "password": DEFAULT_PASSWORD})
+    code = extract_code(outbox[0].body)
+
+    response = client.post("/api/verification/check", json={"email": "u@example.com", "code": code, "password": "wrong-password"})
+    assert response.status_code == 401
+    assert response.get_json()["message_code"] == "INVALID_CREDENTIALS"
+    assert M.User.query.filter_by(email="u@example.com").first().is_verified is False
+
+
+def test_reregister_cannot_take_over_unverified_account(client, outbox):
+    """攻擊流程：本人先註冊、還沒驗證 → 別人用同一個 email 重新註冊、換掉密碼
+    → 本人拿最新的驗證碼驗證，不能讓帳號帶著別人設的密碼被啟用"""
+    client.post("/api/register", json={"email": "victim@example.com", "password": "victim-password"})
+    client.post("/api/register", json={"email": "victim@example.com", "password": "attacker-password"})
+    latest_code = extract_code(outbox[-1].body)
+
+    response = client.post("/api/verification/check", json={"email": "victim@example.com", "code": latest_code, "password": "victim-password"})
+    assert response.status_code == 401
+    assert response.get_json()["message_code"] == "INVALID_CREDENTIALS"
+
+    # 帳號還沒啟用，別人的密碼拿不到 token
+    response = client.post("/api/auth", json={"email": "victim@example.com", "password": "attacker-password"})
+    assert response.status_code == 403
+
+    # 本人重新註冊把密碼換回來，再驗證就成功；別人的密碼從此登不進去
+    client.post("/api/register", json={"email": "victim@example.com", "password": "victim-password"})
+    code = extract_code(outbox[-1].body)
+    response = client.post("/api/verification/check", json={"email": "victim@example.com", "code": code, "password": "victim-password"})
+    assert response.status_code == 200
+    assert client.post("/api/auth", json={"email": "victim@example.com", "password": "victim-password"}).status_code == 200
+    assert client.post("/api/auth", json={"email": "victim@example.com", "password": "attacker-password"}).status_code == 401
+
+
+def test_squatted_email_owner_can_still_verify(client, outbox):
+    """攻擊流程：別人先用本人的 email 搶先註冊 → 本人之後註冊（密碼蓋掉別人的）
+    → 本人用自己的密碼驗證成功，別人的密碼登不進去"""
+    client.post("/api/register", json={"email": "victim@example.com", "password": "attacker-password"})
+    client.post("/api/register", json={"email": "victim@example.com", "password": "victim-password"})
+    code = extract_code(outbox[-1].body)
+
+    response = client.post("/api/verification/check", json={"email": "victim@example.com", "code": code, "password": "victim-password"})
+    assert response.status_code == 200
+    assert client.post("/api/auth", json={"email": "victim@example.com", "password": "victim-password"}).status_code == 200
+    assert client.post("/api/auth", json={"email": "victim@example.com", "password": "attacker-password"}).status_code == 401
 
 
 def test_get_user_does_not_expose_verification_code(client, alice, M, db_session):
@@ -188,13 +245,13 @@ def test_send_verification_success(client, outbox):
 
 def test_verify_wrong_code(client):
     client.post("/api/register", json={"email": "u@example.com", "password": DEFAULT_PASSWORD})
-    response = client.post("/api/verification/check", json={"email": "u@example.com", "code": "000000x"})
+    response = client.post("/api/verification/check", json={"email": "u@example.com", "code": "000000x", "password": DEFAULT_PASSWORD})
     assert response.status_code == 400
     assert response.get_json()["message_code"] == "VERIFICATION_CODE_INCORRECT"
 
 
 def test_verify_unknown_user(client):
-    response = client.post("/api/verification/check", json={"email": "nobody@example.com", "code": "123456"})
+    response = client.post("/api/verification/check", json={"email": "nobody@example.com", "code": "123456", "password": DEFAULT_PASSWORD})
     assert response.status_code == 400
     assert response.get_json()["message_code"] == "USER_NOT_FOUND"
 
@@ -207,7 +264,7 @@ def test_verify_expired_code(client, outbox, M, db_session):
     user.verification_code_expires = datetime(2000, 1, 1)
     db_session.commit()
 
-    response = client.post("/api/verification/check", json={"email": "u@example.com", "code": code})
+    response = client.post("/api/verification/check", json={"email": "u@example.com", "code": code, "password": DEFAULT_PASSWORD})
     assert response.status_code == 400
     assert response.get_json()["message_code"] == "VERIFICATION_CODE_EXPIRED"
 
@@ -216,7 +273,7 @@ def test_verify_success_marks_user_verified(client, outbox, M, db_session):
     client.post("/api/register", json={"email": "u@example.com", "password": DEFAULT_PASSWORD})
     code = extract_code(outbox[0].body)
 
-    response = client.post("/api/verification/check", json={"email": "u@example.com", "code": code})
+    response = client.post("/api/verification/check", json={"email": "u@example.com", "code": code, "password": DEFAULT_PASSWORD})
     assert response.status_code == 200
     assert response.get_json()["message_code"] == "VERIFICATION_SUCCESS"
 

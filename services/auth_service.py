@@ -222,12 +222,22 @@ class AuthService:
             return error_body("Send failed", "SEND_FAILED"), 500
 
     @staticmethod
-    def verify_code(email: str, code: str):
+    def verify_code(email: str, code: str, password):
+        """檢查驗證碼，驗證碼和密碼都對才標記為已驗證
+
+        為什麼要帶密碼：還沒驗證的帳號可以用同一個 email 重新註冊（會換掉密碼）。
+        如果只看驗證碼，別人搶在本人驗證前重新註冊，本人一驗證，帳號就帶著別人設的密碼被啟用了。
+        """
         logger.info(f"[帳號:{email}] 驗證驗證碼")
         try:
             # 正規化：透過 (email or "")，若 email 是 None，就會自動換成空字串 ""
             email = (email or "").strip()
             code = code or ""
+            # 跟登入一樣去掉前後空白；不是字串（例如數字）就當成沒帶
+            password = password.strip() if isinstance(password, str) else ""
+
+            if not password:
+                return error_body("Password cannot be empty", "PASSWORD_REQUIRED"), 400
 
             # 在 User 資料表裡用 email 當條件查詢，只取第一筆；找不到就是 None
             user: User | None = User.query.filter_by(email=email).first()
@@ -250,6 +260,11 @@ class AuthService:
 
                 if expires_time < current_time:
                     return error_body("Verification code expired", "VERIFICATION_CODE_EXPIRED"), 400
+
+            # 驗證碼對了才比對密碼（放在後面，沒有驗證碼的人就無法拿這支 API 試密碼）
+            if not bcrypt.check_password_hash(user.password_hash, password):
+                logger.warning(f"[帳號:{email}] 驗證碼正確但密碼錯誤")
+                return error_body("Incorrect password", "INVALID_CREDENTIALS"), 401
 
             # 驗證成功，標記為已驗證
             user.is_verified = True
