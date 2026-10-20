@@ -11,17 +11,15 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-fileConfig(config.config_file_name)
+# disable_existing_loggers=False：預設會把已存在的 logger 全部停用，
+# 在 app 裡呼叫 upgrade() 之後，utils.logger 的 log 就全部消失了
+fileConfig(config.config_file_name, disable_existing_loggers=False)
 logger = logging.getLogger('alembic.env')
 
 
 def get_engine():
-    try:
-        # this works with Flask-SQLAlchemy<3 and Alchemical
-        return current_app.extensions['migrate'].db.get_engine()
-    except (TypeError, AttributeError):
-        # this works with Flask-SQLAlchemy>=3
-        return current_app.extensions['migrate'].db.engine
+    # Flask-SQLAlchemy 3 以上用 .engine（舊的 get_engine() 已棄用，3.2 會移除）
+    return current_app.extensions['migrate'].db.engine
 
 
 def get_engine_url():

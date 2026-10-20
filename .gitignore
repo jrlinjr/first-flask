@@ -1,2 +1,10 @@
 __pycache__/
 *.pyc
+.env
+.venv/
+log/
+.pytest_cache/
+.DS_Store
+.gstack/
+docs/
+postman/

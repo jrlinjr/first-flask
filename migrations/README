@@ -1,1 +1,41 @@
-Single-database configuration for Flask.
+資料表結構的版本控制（Flask-Migrate / Alembic）
+
+versions/ 裡每一支檔案是一次「資料表結構的變更」，依建立時間排序。
+資料庫裡的 alembic_version 表記著「這個資料庫目前套用到哪一支」。
+
+
+改資料表的流程
+--------------
+1. 改 models/ 裡的 model（加欄位、改型別、加新表…）
+
+2. 產生 migration（會比對 models 和資料庫，把差異寫成一支新檔案）
+       .venv/bin/flask --app main db migrate -m "加上 xxx 欄位"
+
+3. 打開 versions/ 裡剛產生的檔案檢查一次（自動產生的不一定完全對，例如改欄位名稱
+   會被當成「刪掉舊欄位 + 新增欄位」，資料會不見，要手動改成 alter_column）
+
+4. 套用到資料庫
+       .venv/bin/flask --app main db upgrade
+
+   python main.py 和 Docker 啟動時也都會自動執行 upgrade
+
+5. 跑測試：tests/test_migrations.py 會檢查 migration 建出來的表跟 models 一致
+
+
+常用指令
+--------
+    flask --app main db current      看資料庫目前在哪一版
+    flask --app main db history      列出所有 migration
+    flask --app main db check        檢查 models 有沒有還沒產生 migration 的變更
+    flask --app main db downgrade    退回上一版（會刪欄位 / 刪表，資料可能不見，小心用）
+
+
+注意
+----
+- 不要再用 db.create_all() 建表：它建的表不會記在 migration 裡，換一台資料庫就會少表
+- 已經用 create_all() 建好表的舊資料庫，不要跑第一支 migration（會因為表已存在而失敗），
+  改用 stamp 標記成已套用：
+       flask --app main db stamp 0091439b0ba1
+  本機的 first 資料庫已經在 2026-10-20 標記過了
+- env.py 把 fileConfig 的 disable_existing_loggers 改成 False，否則套用 migration 之後
+  utils.logger 的 log 會全部消失
