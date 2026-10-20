@@ -1,20 +1,25 @@
-"""驗證碼、隨機密碼、好友邀請碼的產生"""
-import random
+"""驗證碼、隨機密碼、好友邀請碼的產生
+
+驗證碼和密碼用 secrets（密碼學等級的亂數），不用 random：
+random 是可預測的偽亂數，拿到夠多輸出就能推算出下一個。
+"""
+import secrets
 import string
 
 
 def generate_verification_code() -> str:
     """6 位數字驗證碼"""
-    return str(random.randint(100000, 999999))
+    # randbelow(900000) 會得到 0 ~ 899999，加上 100000 變成 100000 ~ 999999
+    return str(100000 + secrets.randbelow(900000))
 
 
 def generate_random_password(length: int = 8) -> str:
     """隨機密碼（大小寫英文 + 數字）
 
-    choices() 會從字元池中隨機抽 k 個（可重複）
+    secrets.choice() 每次從字元池中隨機抽 1 個，抽 length 次（可重複）
     """
     pool = string.ascii_uppercase + string.ascii_lowercase + string.digits
-    return "".join(random.choices(pool, k=length))
+    return "".join(secrets.choice(pool) for _ in range(length))
 
 
 def generate_invite_code(user_id) -> str:
