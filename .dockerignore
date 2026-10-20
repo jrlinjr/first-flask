@@ -1,0 +1,22 @@
+# 不要進映像的檔案
+
+# 密碼：由 docker-compose.yml 的 env_file 在執行時帶進容器
+.env
+
+# 本機環境 / 快取
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# 版控、log、測試、其他不需要的
+.git/
+.gitignore
+log/
+instance/
+tests/
+Dockerfile
+docker-compose.yml
+.dockerignore
