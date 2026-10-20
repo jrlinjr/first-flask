@@ -1,0 +1,26 @@
+# Web 框架
+Flask==3.1.2
+gunicorn==23.0.0          # 正式環境 / Docker 用的 WSGI 伺服器（開發時用 python main.py 就好）
+
+# 資料庫（MySQL）
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy==2.0.43
+PyMySQL==1.1.2
+cryptography==45.0.7      # PyMySQL 連 MySQL 8 以上的密碼驗證需要
+Flask-Migrate==4.1.0
+alembic==1.16.5
+
+# 登入 / 密碼
+Flask-JWT-Extended==4.7.1
+PyJWT==2.10.1
+Flask-Bcrypt==1.0.1
+bcrypt==4.3.0
+
+# 寄信
+Flask-Mail==0.10.0
+
+# 設定
+python-dotenv==1.1.1
+
+# 測試
+pytest==9.1.1
