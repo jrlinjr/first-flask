@@ -52,6 +52,7 @@ def create_app() -> Flask:
         MAIL_USERNAME=env.mail_username,
         MAIL_PASSWORD=env.mail_password,
         MAIL_DEFAULT_SENDER=env.mail_username,
+        MAIL_SUPPRESS_SEND=env.mail_suppress_send,
     )
 
     # 初始化所有擴充套件

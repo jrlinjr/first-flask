@@ -5,6 +5,10 @@
 #
 # 需要的設定都在 .env（範本見 .env.example）
 #
+# 服務 / 容器：
+#   app    → first_flaskapi        Flask API（主服務），本機 5001
+#   mysql  → first_flaskapi_mysql  MySQL，本機 3307
+#
 # log 都會寫到本機的 ./log/：
 #   log/debug.log、info.log、warning.log、error.log、critical.log   API 依等級分檔
 #   log/access.log                                                  每個請求（gunicorn）
@@ -22,9 +26,36 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
+  # ---------------- Flask API（主服務）----------------
+  app:
+    build: .
+    image: first_flaskapi
+    container_name: first_flaskapi
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      mysql:
+        condition: service_healthy   # 等 MySQL 真的能連了才啟動
+    env_file: .env                   # JWT、郵件等設定
+    environment:
+      TZ: Asia/Taipei
+      LOG_TO_FILE: "1"
+      # 1 = 不真的寄信，驗證碼寫進 log/info.log（沒設定 Gmail 或測試時用）
+      # 也可以臨時指定：MAIL_SUPPRESS_SEND=1 docker compose up -d
+      MAIL_SUPPRESS_SEND: ${MAIL_SUPPRESS_SEND:-0}
+      # 蓋掉 .env 裡連本機 127.0.0.1 的設定，改連 compose 裡的 mysql 服務
+      SQLALCHEMY_DATABASE_URI: mysql+pymysql://${MYSQL_USER:-first_app}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-first}?charset=utf8mb4
+    volumes:
+      # API 和 gunicorn 的 log 寫回本機的 ./log
+      - ./log:/app/log
+    ports:
+      # 本機用 5001 連（macOS 的 AirPlay 佔用 5000）
+      - "${APP_PORT:-5001}:5000"
+
   # ---------------- MySQL ----------------
-  db:
+  mysql:
     image: mysql:8.4
+    container_name: first_flaskapi_mysql
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -56,27 +87,6 @@ services:
       timeout: 5s
       retries: 30
       start_period: 20s
-
-  # ---------------- Flask API ----------------
-  app:
-    build: .
-    restart: unless-stopped
-    logging: *default-logging
-    depends_on:
-      db:
-        condition: service_healthy   # 等 MySQL 真的能連了才啟動
-    env_file: .env                   # JWT、郵件等設定
-    environment:
-      TZ: Asia/Taipei
-      LOG_TO_FILE: "1"
-      # 蓋掉 .env 裡連本機 127.0.0.1 的設定，改連 compose 裡的 db 服務
-      SQLALCHEMY_DATABASE_URI: mysql+pymysql://${MYSQL_USER:-first_app}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE:-first}?charset=utf8mb4
-    volumes:
-      # API 和 gunicorn 的 log 寫回本機的 ./log
-      - ./log:/app/log
-    ports:
-      # 本機用 5001 連（macOS 的 AirPlay 佔用 5000）
-      - "${APP_PORT:-5001}:5000"
 
 volumes:
   mysql_data:

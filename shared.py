@@ -30,6 +30,8 @@ class Env:
         self.mail_use_tls: bool = os.getenv("MAIL_USE_TLS", "True").lower() == "true"
         self.mail_username: str | None = os.getenv("MAIL_USERNAME")
         self.mail_password: str | None = os.getenv("MAIL_PASSWORD")
+        # 設成 1 就不真的寄信（只寫 log），開發 / 測試時避免一直寄信
+        self.mail_suppress_send: bool = os.getenv("MAIL_SUPPRESS_SEND", "0") == "1"
 
         # 開發伺服器的埠號（macOS 的 AirPlay 接收器會佔用 5000，撞到時改成別的）
         self.port: int = int(os.getenv("PORT", 5000))
